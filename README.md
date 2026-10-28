@@ -137,6 +137,11 @@ Designed to run behind an authenticating gateway (e.g. a Cloudflare Access / OAu
 front door) so the `/mcp` and `/auth` endpoints are never exposed unauthenticated -
 the server itself holds a live financial session and must not be publicly reachable.
 
+Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
+(`start.sh` → `dist/index.js` on `127.0.0.1:8787`). After changing `src/`, run
+`npm run deploy`: it rebuilds `dist/` and restarts the agent with
+`launchctl kickstart -k`. A `post-merge` git hook runs it after merges into `main`.
+
 ## Notes
 
 - If a tool returns `PersistedQueryNotFound`, Rocket Money rotated a GraphQL query
