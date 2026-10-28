@@ -128,6 +128,7 @@ ROCKETMONEY_STATE_DIR=./.state PORT=8080 node dist/index.js
 | `PORT` | `8080` | HTTP port |
 | `ROCKETMONEY_STATE_DIR` | `/data/rocketmoney` | Where the rotating session is persisted |
 | `ROCKETMONEY_READ_ONLY` | unset | `1` to leave the write tools unregistered |
+| `ROCKETMONEY_LOGIN_HEADLESS` | `0` | Auto-login browser: `0` headful (needed on Fly), `auto` headless with a headful fallback, `1` headless only |
 | `ROCKETMONEY_KEEPALIVE_MS` | `7200000` | Keepalive interval (2h) |
 | `ROCKETMONEY_WEB_CLIENT_VERSION` | captured default | `x-truebill-web-client-version` header |
 

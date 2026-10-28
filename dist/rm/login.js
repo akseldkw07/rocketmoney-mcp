@@ -4,6 +4,7 @@ import { addExtra } from "puppeteer-extra";
 import Stealth from "puppeteer-extra-plugin-stealth";
 import vanilla from "rebrowser-puppeteer-core";
 import { seedSession, sessionStatus } from "./session.js";
+import { probeSession } from "./client.js"; // circular; runtime-only use
 // Auth0/Cloudflare bot-detection flags plain headless Chromium (the CDP
 // Runtime.enable leak + navigator.webdriver + headless signals). rebrowser-
 // puppeteer-core patches the CDP leak; the stealth plugin patches the fingerprint;
@@ -38,6 +39,11 @@ const CHROMIUM = () => process.env.CHROMIUM_PATH ?? "/usr/bin/chromium";
 // residential exit (a SOCKS5 proxy on the home Mac Mini, reached over Tailscale)
 // e.g. ROCKETMONEY_LOGIN_PROXY=socks5://100.93.15.8:7333. Empty = direct.
 const PROXY = () => process.env.ROCKETMONEY_LOGIN_PROXY ?? "";
+// Whether the login browser runs headless. "0" (default) = always headful, which
+// Fly needs: from its datacenter egress headless gets bot-flagged. "auto" = try
+// headless first and only open a headful window if that run fails before MFA, so
+// on a residential IP (the local Mac) no window pops up. "1" = headless only.
+const HEADLESS = () => process.env.ROCKETMONEY_LOGIN_HEADLESS ?? "0";
 const STATE_DIR = () => process.env.ROCKETMONEY_STATE_DIR ?? "/data/rocketmoney";
 const PROFILE_DIR = () => join(STATE_DIR(), "chrome-profile");
 const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
@@ -153,7 +159,7 @@ export function attemptLogin(reason, force = false) {
             error: `rate-limited; next attempt in ${Math.ceil(loginCooldownMs() / 60000)}m`,
         });
     }
-    inFlight = doLogin(reason)
+    inFlight = runLogin(reason)
         .then((r) => {
         failures = r.ok ? 0 : failures + 1;
         recordResult(reason, r);
@@ -170,6 +176,27 @@ export function attemptLogin(reason, force = false) {
         inFlight = null;
     });
     return inFlight;
+}
+/**
+ * One login per the HEADLESS mode. A failed headless run is retried headless
+ * once: on macOS the headless browser has disconnected right after a SUCCESSFUL
+ * form login, leaving the profile signed in, so the retry is a quick warm renewal.
+ * Only then does "auto" fall back to a headful window. No retry once a run has
+ * reached MFA: a second run would text a second SMS code.
+ */
+async function runLogin(reason) {
+    const mode = HEADLESS();
+    if (mode !== "auto" && mode !== "1")
+        return doLogin(reason, false);
+    let r = await doLogin(reason, true);
+    if (r.ok || r.reachedMfa)
+        return r;
+    console.warn(`[auto-login] headless run failed (${r.error}); retrying headless`);
+    r = await doLogin(reason, true);
+    if (r.ok || r.reachedMfa || mode === "1")
+        return r;
+    console.warn(`[auto-login] headless retry failed (${r.error}); retrying headful`);
+    return doLogin(reason, false);
 }
 // ── DOM helpers ────────────────────────────────────────────────────
 async function firstVisible(page, selectors, timeout = 12000) {
@@ -205,7 +232,7 @@ async function readSession(page) {
     }
 }
 // ── The login run ──────────────────────────────────────────────────
-async function doLogin(reason) {
+async function doLogin(reason, headless) {
     const profile = PROFILE_DIR();
     if (!existsSync(profile))
         mkdirSync(profile, { recursive: true });
@@ -219,7 +246,7 @@ async function doLogin(reason) {
         }
     }
     const proxy = PROXY();
-    console.log(`[auto-login] starting (${reason})${proxy ? ` via proxy ${proxy}` : ""}`);
+    console.log(`[auto-login] starting ${headless ? "headless" : "headful"} (${reason})${proxy ? ` via proxy ${proxy}` : ""}`);
     let browser = null;
     try {
         const args = [
@@ -238,7 +265,9 @@ async function doLogin(reason) {
         }
         browser = (await puppeteer.launch({
             executablePath: CHROMIUM(),
-            headless: false, // headful (under Xvfb on Fly): headless is what gets bot-flagged
+            // Headful by default (under Xvfb on Fly): headless is what gets bot-flagged
+            // there. See HEADLESS for when headless is used instead.
+            headless,
             userDataDir: profile,
             args,
             defaultViewport: { width: 1280, height: 900 },
@@ -273,14 +302,27 @@ async function doLogin(reason) {
             console.warn(`[auto-login] initial nav slow (${e.message}); polling for the form anyway`);
         }
         await sleep(3000);
-        // Path 1: trusted profile silently renewed -> already have a session.
-        {
-            const s = await readSession(page);
-            if (s.sid) {
-                seedSession(s.header);
-                console.log("[auto-login] warm renewal succeeded (no login form, no MFA)");
-                return { ok: true };
+        // A tb.auth0.sid in the jar is NOT proof of a session: the profile keeps the
+        // last one it saw, long after it went stale (and the server rotating its copy
+        // stales the profile's). Accepting it seeded a dead cookie, which 401'd within
+        // minutes and set off another login. So every candidate is checked against the
+        // API once, and only a working (rotated) cookie is seeded.
+        const rejected = new Set();
+        const acceptSession = async (s) => {
+            if (!s.sid || rejected.has(s.sid))
+                return false;
+            const live = await probeSession(s.header);
+            if (!live) {
+                rejected.add(s.sid);
+                return false;
             }
+            seedSession(live);
+            return true;
+        };
+        // Path 1: trusted profile silently renewed -> already have a session.
+        if (await acceptSession(await readSession(page))) {
+            console.log("[auto-login] warm renewal succeeded (no login form, no MFA)");
+            return { ok: true };
         }
         // Path 2: a login form is present -> fill identifier-first Auth0 flow.
         // Generous: every hop here is proxied through the home SOCKS exit, so Auth0's
@@ -330,7 +372,8 @@ async function doLogin(reason) {
             await sleep(1500);
             // Bail immediately if the browser/tab died - don't spin on a dead page.
             if (browserDead || page.isClosed()) {
-                return { ok: false, error: "browser crashed/disconnected mid-login (check VM memory)" };
+                const why = browserDead ? "browser crashed/disconnected" : "login tab closed";
+                return { ok: false, error: `${why} mid-login (check VM memory)` };
             }
             // The whole body is best-effort: the page redirects underneath us (email->
             // password, submit->MFA, MFA->callback), and any call landing mid-navigation
@@ -338,9 +381,7 @@ async function doLogin(reason) {
             // just skip the offending tick and try again once navigation settles.
             try {
                 // Always check for a session FIRST, on every tick, whatever else is pending.
-                const s = await readSession(page);
-                if (s.sid) {
-                    seedSession(s.header);
+                if (await acceptSession(await readSession(page))) {
                     console.log(`[auto-login] success${otpArmed ? " (MFA satisfied)" : ""}`);
                     return { ok: true };
                 }
@@ -387,6 +428,7 @@ async function doLogin(reason) {
         return {
             ok: false,
             needsOtp: otpArmed && !otpSubmitted,
+            reachedMfa: otpArmed,
             error: otpArmed
                 ? "reached the SMS challenge but no session appeared (code not supplied in time?)"
                 : "timed out without a session cookie",

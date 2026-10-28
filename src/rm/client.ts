@@ -2,11 +2,12 @@ import {
   applySetCookies,
   loadSession,
   markSessionDead,
+  parseCookieHeader,
   saveSession,
   serializeJar,
 } from "./session.js";
 import { monthWindows, ymd, addDays } from "./windows.js";
-import { attemptLogin, autoLoginConfigured, type LoginResult } from "./login.js";
+import { attemptLogin, autoLoginConfigured, type LoginResult } from "./login.js"; // circular; runtime-only use
 
 const GRAPHQL_URL = "https://client-api.rocketmoney.com/graphql";
 // Captured from the web app. The exact value doesn't gate persisted-query
@@ -228,6 +229,45 @@ async function rmExecuteUnlocked<T = unknown>(opName: string, payload: Record<st
   saveSession(jar);
 
   return json.data as T;
+}
+
+/**
+ * Check a cookie header the login browser produced, outside the session file and
+ * rmChain (nothing is marked dead, no re-login is triggered). The response rotates
+ * the cookie and the old value goes stale, so this returns the ROTATED header to
+ * seed with, or null if the cookie isn't authenticated.
+ */
+export async function probeSession(cookieHeader: string): Promise<string | null> {
+  try {
+    const jar = parseCookieHeader(cookieHeader);
+    const res = await fetch(GRAPHQL_URL, {
+      method: "POST",
+      headers: {
+        accept: "application/graphql+json, application/json",
+        "content-type": "application/json",
+        origin: "https://app.rocketmoney.com",
+        referer: "https://app.rocketmoney.com/",
+        "user-agent": USER_AGENT,
+        "x-truebill-web-client-version": WEB_CLIENT_VERSION,
+        cookie: serializeJar(jar),
+      },
+      body: JSON.stringify({
+        operationName: "AuthenticationCheck",
+        variables: {},
+        extensions: { persistedQuery: { version: 1, sha256Hash: PERSISTED.AuthenticationCheck } },
+      }),
+      redirect: "manual",
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { data?: { viewer?: { id?: string } }; errors?: unknown[] };
+    if (json.errors?.length || !json.data?.viewer?.id) return null;
+    const setCookies = (res as unknown as { headers: { getSetCookie?: () => string[] } }).headers
+      .getSetCookie?.();
+    if (setCookies?.length) applySetCookies(jar, setCookies);
+    return serializeJar(jar);
+  } catch {
+    return null;
+  }
 }
 
 /** Persisted-query READ (hash captured from a HAR; may rotate server-side). */

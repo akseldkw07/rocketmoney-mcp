@@ -26,6 +26,9 @@
         <!-- log back in with the Keychain credentials (start.sh) when the session dies -->
         <key>ROCKETMONEY_AUTO_LOGIN</key>
         <string>1</string>
+        <!-- log in with a headless Chrome; a window opens only if headless fails twice -->
+        <key>ROCKETMONEY_LOGIN_HEADLESS</key>
+        <string>auto</string>
         <key>CHROMIUM_PATH</key>
         <string>/Applications/Google Chrome.app/Contents/MacOS/Google Chrome</string>
         <!-- 30 min instead of 2 h: keeps the session warm and retries a dead one sooner -->
