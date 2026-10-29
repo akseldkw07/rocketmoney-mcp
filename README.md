@@ -79,6 +79,15 @@ existing transactions were updated. `apply_to_existing=false` instead adds
 `update_rule` with `false` refuses a rule that already matches anything, since saving
 would re-apply it.
 
+### Categorization conventions (Venmo, Zelle, group payments)
+
+How person-to-person payments get categorized is set out in
+[`CATEGORIZATION.md`](CATEGORIZATION.md). Each payment is filed by what it paid for,
+repayments net inside the category of the original charge, and the `Venmo` category holds
+only transfers between your own accounts. Rocket Money rules can't express this, so an
+assistant applies it by hand with the tools above. Personal specifics (ids, people, rent)
+go in a gitignored `CATEGORIZATION.local.md`.
+
 ### What you can and cannot change about a subscription
 
 `update_subscription` takes only what you want changed and preserves the rest from a

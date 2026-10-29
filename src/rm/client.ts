@@ -716,15 +716,138 @@ export interface RMTransaction {
   nodeId: string;
   amountCents: number;
   date: string;
+  /** The date the bank posted it; differs from `date` once the date is changed by hand. */
+  originalDate: string;
   note: string | null;
   name: string;
+  /** A rename (by hand or by a rule), or null. */
+  customName: string | null;
   categoryLabel: string | null;
   accountId: string | null;
+  /** null (counted), "budget" (left out of budgets) or "everything" (left out of all spending/charts). */
+  ignoredFrom: string | null;
+  /** Rule ids that have applied to this transaction, in RM's order. */
+  ruleIds: string[];
+}
+
+/** One Transaction node (LightTransaction fragment) -> RMTransaction, or null if it lacks the basics. */
+export function toRMTransaction(o: Record<string, unknown>): RMTransaction | null {
+  if (typeof o.id !== "string" || typeof o.amount !== "number") return null;
+  const category = o.category as { label?: string } | null | undefined;
+  const account = o.account as { id?: string } | null | undefined;
+  return {
+    nodeId: o.id,
+    amountCents: o.amount,
+    date: String(o.date ?? ""),
+    originalDate: String(o.posted_date ?? o.date ?? ""),
+    note: (o.note as string | null) ?? null,
+    name: String(o.longName ?? o.shortName ?? ""),
+    customName: (o.custom_name as string | null) ?? null,
+    categoryLabel: category?.label ?? null,
+    accountId: account?.id ?? null,
+    ignoredFrom: (o.ignoredFrom as string | null) ?? null,
+    ruleIds: Array.isArray(o.transactionRuleNodeIds) ? (o.transactionRuleNodeIds as string[]) : [],
+  };
+}
+
+// The transactions-page query cut down to what RMTransaction reads, plus
+// posted_date (the bank date, which survives a date change) and custom_name.
+// Sent as full text, so it doesn't depend on a persisted hash. `gteDate` and
+// `ltDate` filter on `date`, the possibly-changed one (checked 2026-10-29).
+const TRANSACTION_SEARCH = `query TransactionSearch($query: String, $order: String, $accountIds: [ID!], $transactionCategoryIds: [ID!], $gteDate: Date, $ltDate: Date, $cursor: String, $pageSize: Int!) {
+  viewer {
+    id
+    transactions(first: $pageSize, accountIds: $accountIds, transactionCategoryIds: $transactionCategoryIds, query: $query, order: $order, gteDate: $gteDate, ltDate: $ltDate, excludeIgnoredFrom: null, after: $cursor) {
+      edges {
+        node {
+          __typename
+          id
+          date
+          posted_date
+          amount
+          shortName
+          longName(prependCustomName: false)
+          custom_name
+          note
+          ignoredFrom
+          transactionRuleNodeIds
+          category { id label __typename }
+          account { id __typename }
+        }
+        __typename
+      }
+      pageInfo { endCursor hasNextPage __typename }
+      __typename
+    }
+    __typename
+  }
+}`;
+
+export interface SearchOptions {
+  query?: string | null;
+  /** On/after this date (YYYY-MM-DD). */
+  gteDate?: string | null;
+  /** Strictly before this date (YYYY-MM-DD). */
+  ltDate?: string | null;
+  /** Account node ids; empty means every account. */
+  accountIds?: string[];
+  /** TransactionCategory node ids; empty means every category. */
+  categoryIds?: string[];
+  /** Resume from a previous page's nextCursor. */
+  cursor?: string | null;
+  /** Stop after this many rows (rounded up to a whole 200-row page). */
+  limit?: number;
+}
+
+/**
+ * Search transactions, newest first, paging 200 at a time until `limit` rows or
+ * the end. Returns nextCursor when more remain, so a caller can walk any window
+ * past the limit. Dedupes by node id.
+ */
+export async function searchTransactionsPage(
+  opts: SearchOptions,
+): Promise<{ transactions: RMTransaction[]; nextCursor: string | null }> {
+  const all: RMTransaction[] = [];
+  const limit = opts.limit ?? 1200;
+  let cursor = opts.cursor ?? null;
+  let nextCursor: string | null = null;
+
+  while (all.length < limit) {
+    const data = await rmFullText<Record<string, unknown>>("TransactionSearch", TRANSACTION_SEARCH, {
+      query: opts.query ?? null,
+      order: "reverse:date",
+      accountIds: opts.accountIds ?? [],
+      transactionCategoryIds: opts.categoryIds ?? [],
+      gteDate: opts.gteDate ?? null,
+      ltDate: opts.ltDate ?? null,
+      cursor,
+      pageSize: 200,
+    });
+
+    const nodes: Record<string, unknown>[] = [];
+    collectByType(data, "Transaction", nodes);
+    const before = all.length;
+    for (const o of nodes) {
+      const t = toRMTransaction(o);
+      if (t) all.push(t);
+    }
+
+    const pageInfo = findPageInfo(data);
+    nextCursor = pageInfo?.hasNextPage && pageInfo.endCursor && all.length > before ? pageInfo.endCursor : null;
+    if (!nextCursor) break;
+    cursor = nextCursor;
+  }
+
+  const seen = new Set<string>();
+  return {
+    transactions: all.filter((t) => (seen.has(t.nodeId) ? false : (seen.add(t.nodeId), true))),
+    nextCursor,
+  };
 }
 
 /**
  * Search transactions matching `query` (optional) on/after `gteDate`
- * (YYYY-MM-DD, optional). Paginates up to a safety cap and dedupes.
+ * (YYYY-MM-DD, optional), up to maxPages pages of 200.
  *
  * `accountIds` takes Account node ids (the same base64 ids getAccounts returns);
  * empty means every account. Without it there is no way to tell which card a
@@ -737,50 +860,67 @@ export async function searchTransactions(
   maxPages = 6,
   accountIds: string[] = [],
 ): Promise<RMTransaction[]> {
-  const all: RMTransaction[] = [];
-  let cursor: string | null = null;
+  return (await searchTransactionsPage({ query, gteDate, accountIds, limit: maxPages * 200 })).transactions;
+}
 
-  for (let page = 0; page < maxPages; page++) {
-    const data = await rmGraphQL<Record<string, unknown>>({
-      operationName: "TransactionsPageTransactionTable",
-      variables: {
-        query,
-        order: "reverse:date",
-        accountIds,
-        transactionCategoryIds: [],
-        gteDate,
-        ltDate: null,
-        cursor,
-        pageSize: 200,
-        metaCategory: null,
-      },
-    });
-
-    const nodes: Record<string, unknown>[] = [];
-    collectByType(data, "Transaction", nodes);
-    const before = all.length;
-    for (const o of nodes) {
-      if (typeof o.id !== "string" || typeof o.amount !== "number") continue;
-      const category = o.category as { label?: string } | null | undefined;
-      const account = o.account as { id?: string } | null | undefined;
-      all.push({
-        nodeId: o.id,
-        amountCents: o.amount,
-        date: String(o.date ?? ""),
-        note: (o.note as string | null) ?? null,
-        name: String(o.longName ?? o.shortName ?? ""),
-        categoryLabel: category?.label ?? null,
-        accountId: account?.id ?? null,
-      });
-    }
-
-    const pageInfo = findPageInfo(data);
-    if (!pageInfo?.hasNextPage || !pageInfo.endCursor || all.length === before) break;
-    cursor = pageInfo.endCursor;
+const CHANGE_DATE = `mutation ChangeTransactionDate($input: ChangeTransactionDateInput!) {
+  changeTransactionDate(input: $input) {
+    transaction { id date posted_date __typename }
+    __typename
   }
+}`;
 
-  const seen = new Set<string>();
-  return all.filter((t) => (seen.has(t.nodeId) ? false : (seen.add(t.nodeId), true)));
+/**
+ * WRITE: change transactions' dates. RM's mutation takes one transaction, so
+ * this is one call per id. `date` "original" resets each to its posted_date,
+ * which RM keeps untouched through any number of date changes (verified
+ * 2026-10-29). Returns each transaction's dates as RM saved them.
+ */
+export async function setTransactionsDate(
+  nodeIds: string[],
+  date: string,
+): Promise<{ id: string; date: string; originalDate: string; error?: string }[]> {
+  const out: { id: string; date: string; originalDate: string; error?: string }[] = [];
+  for (const id of nodeIds) {
+    try {
+      let target = date;
+      if (date === "original") {
+        const read = await rmFullText<{ node?: { posted_date?: string } }>(
+          "TransactionPostedDate",
+          "query TransactionPostedDate($id: ID!) {\n  node(id: $id) {\n    id\n    ... on Transaction {\n      posted_date\n    }\n    __typename\n  }\n}",
+          { id },
+        );
+        if (!read.node?.posted_date) throw new Error("no such transaction, or it has no posted date");
+        target = read.node.posted_date;
+      }
+      const data = await rmFullText<{ changeTransactionDate?: { transaction?: { date?: string; posted_date?: string } } }>(
+        "ChangeTransactionDate",
+        CHANGE_DATE,
+        { input: { transactionNodeId: id, date: target } },
+      );
+      const t = data.changeTransactionDate?.transaction;
+      if (!t?.date) throw new Error("changeTransactionDate returned no transaction");
+      out.push({ id, date: t.date, originalDate: t.posted_date ?? "" });
+    } catch (err) {
+      if (err instanceof RMAuthError) throw err;
+      out.push({ id, date: "", originalDate: "", error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return out;
+}
+
+/** WRITE: set ignore on many transactions in one round trip. Returns RM's countUpdated. */
+export async function setTransactionsIgnored(
+  nodeIds: string[],
+  ignoredFrom: "budget" | "everything" | null,
+): Promise<number> {
+  if (nodeIds.length === 0) return 0;
+  const data = await rmFullText<{ setTransactionsIgnored?: { countUpdated?: number } }>(
+    "SetTransactionsIgnored",
+    "mutation SetTransactionsIgnored($input: SetTransactionsIgnoredInput!) {\n  setTransactionsIgnored(input: $input) {\n    transactions {\n      id\n      ignoredFrom\n      __typename\n    }\n    countUpdated\n    transactionOverrideIds\n    __typename\n  }\n}",
+    { input: { transactionNodeIds: nodeIds, setIgnored: ignoredFrom } },
+  );
+  return data.setTransactionsIgnored?.countUpdated ?? 0;
 }
 
 // ── Categories ─────────────────────────────────────────────────────
@@ -790,10 +930,12 @@ export interface RMCategory {
   id: string; // numeric id decoded from the node id
   label: string;
   type: string; // "default" | "custom"
-  categoryType: string; // "expense" | "income" | "ignored"
+  categoryType: string; // "expense" | "earning" | "ignored"
   includeInSpending: boolean;
   includeInEarnings: boolean;
   taxDeductible: boolean;
+  iconKey: string;
+  color: string; // colors.base, e.g. "rgb(117, 117, 117)"
 }
 
 /** base64(`TransactionCategory:<id>`) for a numeric category id. */
@@ -812,16 +954,7 @@ export async function getTransactionCategories(): Promise<RMCategory[]> {
     const nodeId = typeof o.id === "string" ? o.id : "";
     if (!nodeId || seen.has(nodeId)) continue;
     seen.add(nodeId);
-    cats.push({
-      nodeId,
-      id: fromNodeId(nodeId)?.numericId ?? "",
-      label: String(o.label ?? ""),
-      type: String(o.type ?? ""),
-      categoryType: String(o.categoryType ?? ""),
-      includeInSpending: Boolean(o.includeInSpending),
-      includeInEarnings: Boolean(o.includeInEarnings),
-      taxDeductible: Boolean(o.taxDeductible),
-    });
+    cats.push(toCategory(o));
   }
   return cats.sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -858,6 +991,142 @@ export async function resolveCategoryNodeId(input: string | number): Promise<str
       .map((c) => c.label)
       .join(", ")}`,
   );
+}
+
+// Custom categories. Create and edit both require every field (label,
+// categoryType, taxDeductible, color, iconKey; established 2026-10-29 by the
+// validation-error count when one is left out), so edit merges over the stored
+// category. Only custom categories can be edited or deleted. RM's delete has no
+// reassign: the category's transactions become Uncategorized.
+
+export type CategoryType = "expense" | "earning" | "ignored";
+
+const CATEGORY_FIELDS = "id\n      label\n      type\n      categoryType\n      iconKey\n      includeInSpending\n      includeInEarnings\n      taxDeductible\n      colors {\n        base\n        __typename\n      }\n      __typename";
+
+// The web app's own defaults for a new category's icon, and a neutral gray.
+const DEFAULT_ICON = "coffee";
+const DEFAULT_COLOR = "rgb(117, 117, 117)";
+
+function toCategory(o: Record<string, unknown>): RMCategory {
+  const nodeId = String(o.id ?? "");
+  return {
+    nodeId,
+    id: fromNodeId(nodeId)?.numericId ?? "",
+    label: String(o.label ?? ""),
+    type: String(o.type ?? ""),
+    categoryType: String(o.categoryType ?? ""),
+    includeInSpending: Boolean(o.includeInSpending),
+    includeInEarnings: Boolean(o.includeInEarnings),
+    taxDeductible: Boolean(o.taxDeductible),
+    iconKey: String(o.iconKey ?? ""),
+    color: String((o.colors as { base?: string } | null)?.base ?? ""),
+  };
+}
+
+/** WRITE: create a custom category. Returns it as RM saved it. */
+export async function createCategory(
+  label: string,
+  categoryType: CategoryType,
+  opts: { taxDeductible?: boolean; iconKey?: string; color?: string } = {},
+): Promise<RMCategory> {
+  const data = await rmFullText<{
+    createCustomTransactionCategoryWithCategoryType?: { transactionCategory?: Record<string, unknown> };
+  }>(
+    "CreateCustomTransactionCategoryWithCategoryTypes",
+    `mutation CreateCustomTransactionCategoryWithCategoryTypes($input: createCustomTransactionCategoryWithCategoryTypeInput!) {\n  createCustomTransactionCategoryWithCategoryType(input: $input) {\n    transactionCategory {\n      ${CATEGORY_FIELDS}\n    }\n    __typename\n  }\n}`,
+    {
+      input: {
+        label: label.trim(),
+        categoryType,
+        taxDeductible: opts.taxDeductible ?? false,
+        color: opts.color ?? DEFAULT_COLOR,
+        iconKey: opts.iconKey ?? DEFAULT_ICON,
+      },
+    },
+  );
+  const cat = data.createCustomTransactionCategoryWithCategoryType?.transactionCategory;
+  if (!cat) throw new Error(`createCustomTransactionCategory returned no category for "${label}".`);
+  _catCache = null;
+  return toCategory(cat);
+}
+
+/** A category from the catalog by node id, numeric id or label; throws unless it is custom. */
+async function customCategory(input: string): Promise<RMCategory> {
+  const nodeId = await resolveCategoryNodeId(input);
+  const cat = (await getTransactionCategories()).find((c) => c.nodeId === nodeId);
+  if (!cat) throw new Error(`No category "${input}". Use list_categories to see valid options.`);
+  if (cat.type !== "custom") {
+    throw new Error(`"${cat.label}" is a default Rocket Money category; only custom categories can be changed or deleted.`);
+  }
+  return cat;
+}
+
+/** WRITE: rename or regroup a custom category. Fields left undefined keep their current values. */
+export async function updateCategory(
+  input: string,
+  edit: { label?: string; categoryType?: CategoryType; taxDeductible?: boolean; iconKey?: string; color?: string },
+): Promise<RMCategory> {
+  const cat = await customCategory(input);
+  const data = await rmFullText<{
+    editCustomTransactionCategoryWithCategoryType?: { transactionCategory?: Record<string, unknown> };
+  }>(
+    "EditCustomTransactionCategoryWithCategoryType",
+    `mutation EditCustomTransactionCategoryWithCategoryType($input: EditCustomTransactionCategoryWithCategoryTypeInput!) {\n  editCustomTransactionCategoryWithCategoryType(input: $input) {\n    transactionCategory {\n      ${CATEGORY_FIELDS}\n    }\n    __typename\n  }\n}`,
+    {
+      input: {
+        transactionCategoryNodeId: cat.nodeId,
+        label: edit.label?.trim() || cat.label,
+        categoryType: edit.categoryType ?? cat.categoryType,
+        taxDeductible: edit.taxDeductible ?? cat.taxDeductible,
+        color: edit.color ?? (cat.color || DEFAULT_COLOR),
+        iconKey: edit.iconKey ?? (cat.iconKey || DEFAULT_ICON),
+      },
+    },
+  );
+  const saved = data.editCustomTransactionCategoryWithCategoryType?.transactionCategory;
+  if (!saved) throw new Error(`editCustomTransactionCategory returned no category for "${input}".`);
+  _catCache = null;
+  return toCategory(saved);
+}
+
+/**
+ * WRITE: delete a custom category. With reassignTo, every transaction in it is
+ * moved there first (RM's delete would leave them Uncategorized). Returns how
+ * many were moved.
+ */
+export async function deleteCategory(
+  input: string,
+  reassignTo?: string,
+): Promise<{ deleted: RMCategory; reassigned: number; reassignedTo: string | null }> {
+  const cat = await customCategory(input);
+  let reassigned = 0;
+  let target: string | null = null;
+  if (reassignTo) {
+    target = await resolveCategoryNodeId(reassignTo);
+    if (target === cat.nodeId) throw new Error("reassign_to is the category being deleted.");
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await searchTransactionsPage({ categoryIds: [cat.nodeId], cursor, limit: 2000 });
+      ids.push(...page.transactions.map((t) => t.nodeId));
+      cursor = page.nextCursor;
+    } while (cursor);
+    for (let i = 0; i < ids.length; i += 500) {
+      reassigned += await setTransactionsCategory(ids.slice(i, i + 500), target);
+    }
+    if (reassigned < ids.length) {
+      throw new Error(
+        `Not deleted: moved only ${reassigned} of ${ids.length} transactions out of "${cat.label}". Nothing was deleted; retry or move the rest by hand.`,
+      );
+    }
+  }
+  await rmFullText(
+    "DeleteCustomTransactionCategory",
+    "mutation DeleteCustomTransactionCategory($input: DeleteCustomTransactionCategoryInput!) {\n  deleteCustomTransactionCategory(input: $input) {\n    viewer {\n      id\n      __typename\n    }\n    __typename\n  }\n}",
+    { input: { transactionCategoryNodeId: cat.nodeId } },
+  );
+  _catCache = null;
+  return { deleted: cat, reassigned, reassignedTo: target };
 }
 
 /** WRITE: set (or clear, with "") a transaction's free-text note. Returns the saved note. */

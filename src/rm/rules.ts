@@ -1,4 +1,4 @@
-import { rmFullText } from "./client.js";
+import { rmFullText, toRMTransaction, type RMTransaction } from "./client.js";
 
 // Transaction rules (Settings -> Transaction Rules, or "Edit Rule" on a
 // transaction). Every operation here sends its own query text rather than a
@@ -72,10 +72,16 @@ const RULES_SEARCH = `query TransactionRulesSearch($matchRules: MatchRulesInput!
           node {
             id
             date
+            posted_date
             amount
+            shortName
             longName(prependCustomName: false)
+            custom_name
+            note
             category { id label __typename }
             account { id __typename }
+            ignoredFrom
+            transactionRuleNodeIds
             __typename
           }
           __typename
@@ -401,20 +407,11 @@ export async function getRule(ruleId: string): Promise<RMRule> {
   return rule;
 }
 
-export interface RuleMatch {
-  id: string;
-  date: string;
-  amountCents: number;
-  name: string;
-  categoryLabel: string | null;
-  accountId: string | null;
-}
-
 /** Dry run: how many transactions a set of conditions matches, plus the newest `first`. */
 export async function previewMatches(
   matchRules: MatchRulesV1Input,
   first = 20,
-): Promise<{ count: number; sample: RuleMatch[] }> {
+): Promise<{ count: number; sample: RMTransaction[] }> {
   const data = await rmFullText<{ viewer?: { ruleTransactions?: Record<string, unknown> } }>(
     "TransactionRulesSearch",
     RULES_SEARCH,
@@ -425,14 +422,9 @@ export async function previewMatches(
     | undefined;
   return {
     count: rt?.numMatchingTransactions ?? 0,
-    sample: (rt?.transactions?.edges ?? []).map(({ node: n }) => ({
-      id: String(n.id),
-      date: String(n.date ?? ""),
-      amountCents: typeof n.amount === "number" ? n.amount : 0,
-      name: String(n.longName ?? ""),
-      categoryLabel: (n.category as { label?: string } | null)?.label ?? null,
-      accountId: (n.account as { id?: string } | null)?.id ?? null,
-    })),
+    sample: (rt?.transactions?.edges ?? [])
+      .map(({ node }) => toRMTransaction(node))
+      .filter((t): t is RMTransaction => t !== null),
   };
 }
 

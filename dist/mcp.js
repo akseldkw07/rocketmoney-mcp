@@ -125,20 +125,34 @@ function shapeRule(r) {
         summary: r.updateTitles,
     };
 }
-async function shapeMatches(sample) {
-    const { labels, warning } = sample.length ? await accountLabelsOrIds() : { labels: new Map() };
+/** One transaction row, the same shape from every tool that lists transactions. */
+function shapeTxn(t, labels) {
     return {
-        ...(warning ? { warning } : {}),
-        transactions: sample.map((t) => ({
-            id: t.id,
-            date: t.date,
-            amount: fmt.usd(t.amountCents),
-            name: t.name,
-            category: t.categoryLabel,
-            account: t.accountId ? (labels.get(t.accountId) ?? t.accountId) : null,
-        })),
+        id: t.nodeId,
+        date: t.date,
+        original_date: t.originalDate,
+        amount: fmt.usd(t.amountCents),
+        name: t.name,
+        custom_name: t.customName,
+        category: t.categoryLabel,
+        account: t.accountId ? (labels.get(t.accountId) ?? t.accountId) : null,
+        ignore: t.ignoredFrom ?? "none",
+        applied_rule_ids: t.ruleIds,
+        note: t.note,
     };
 }
+async function shapeTxns(txns) {
+    const { labels, warning } = txns.length ? await accountLabelsOrIds() : { labels: new Map() };
+    return { ...(warning ? { warning } : {}), transactions: txns.map((t) => shapeTxn(t, labels)) };
+}
+/** YYYY-MM-DD plus n days. */
+function shiftYmd(ymd, n) {
+    const d = new Date(`${ymd}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+}
+const ROW_FIELDS = "Each row has date (the current, possibly hand-changed date), original_date (the date the bank posted it), ignore (none = counted, budget = left out of budgets, everything = left out of all spending), applied_rule_ids (rules that have applied to it; when several set the same field, the last id has been the effective one), custom_name (a rename, by hand or by rule), category and account.";
+const RULE_PRECEDENCE = "Rule precedence (measured 2026-10-29; Rocket Money has no priority or order field): when several rules set the same field on one transaction, the most recently SAVED rule usually wins, regardless of how specific it is - a broad name-contains rule saved last beat an older name+amount rule. In one of five observations an older rule kept winning, so check the result: in every observation the effective rule was the last id in the transaction's applied_rule_ids. To make a rule win, save it last (update_rule with no changes re-saves it), then check the transaction. delete_rule with undo_changes resets the fields that rule set to their original values even when another matching rule also sets them; re-save the other rule afterwards.";
 const RULE_LIMITS = "Not supported by Rocket Money's rule API: tags, OR between conditions, more than one name condition, name regex/starts-with, and matching on category.";
 /** Build a fresh McpServer with the Rocket Money tools registered (writes omitted under READ_ONLY). */
 export function buildServer() {
@@ -146,7 +160,7 @@ export function buildServer() {
         instructions: "Access to the user's Rocket Money finances (USD). Read tools: accounts and balances, transactions, spending by category, budgets, net worth, recurring charges (subscriptions, get_subscription), the category catalog (list_categories), and transaction rules (list_rules, get_rule, preview_rule)." +
             (READ_ONLY
                 ? "This server runs in read-only mode: the write tools are not registered, so nothing here can change the account."
-                : "Write tools MUTATE the account: set_transaction_note sets/clears a transaction's note; set_transaction_category recategorizes a transaction (optionally every related transaction from the same merchant); update_subscription corrects a recurring charge's name, amount, cadence or dates; delete_subscription removes one from the list; create_rule/update_rule/delete_rule manage transaction rules (run preview_rule first; by default a rule is applied to every existing match too; apply_to_existing=false limits it to future transactions).To recategorize, first call list_categories to see valid labels/ids, then pass a label like \"Groceries\" (or a category id) to set_transaction_category. Marking a subscription cancelled is not possible: Rocket Money's API has no such field for a subscription it detected from transactions.") +
+                : "Write tools MUTATE the account: set_transaction_note sets/clears a transaction's note; set_transaction_category recategorizes a transaction (optionally every related transaction from the same merchant); update_subscription corrects a recurring charge's name, amount, cadence or dates; delete_subscription removes one from the list; set_transaction_ignore and set_transaction_date change ignore state and dates in batches; create_category/update_category/delete_category manage custom categories; create_rule/update_rule/delete_rule manage transaction rules (run preview_rule first; by default a rule is applied to every existing match too; apply_to_existing=false limits it to future transactions).To recategorize, first call list_categories to see valid labels/ids, then pass a label like \"Groceries\" (or a category id) to set_transaction_category. Marking a subscription cancelled is not possible: Rocket Money's API has no such field for a subscription it detected from transactions.") +
             " If a tool reports the session is inactive, the user must re-authenticate at the auth page.",
     });
     server.registerTool("session_status", {
@@ -263,60 +277,68 @@ export function buildServer() {
     }, tool(async ({ days }) => fmt.shapeUpcoming(await rm.getUpcoming(days ?? 28))));
     server.registerTool("search_transactions", {
         title: "Search transactions",
-        description: "Search transactions by merchant/description text, since a date, and/or account. All filters optional; omit everything to list recent transactions. Amounts in USD; returns up to ~1200 matches. Each row carries the account it posted to - pass account_ids to filter server-side, which is far cheaper than pulling every account and discarding.",
+        description: "Search transactions by merchant/description text, date window, account and/or category. All filters optional; omit everything to list recent transactions. Newest first, amounts in USD. Returns up to `limit` rows (default 1200); when more match, next_cursor is set - pass it back as `cursor` to continue. " +
+            ROW_FIELDS +
+            " Filtering server-side (account_ids, category_ids, since/until) is far cheaper than pulling everything and discarding.",
         inputSchema: {
             query: z.string().optional().describe("Merchant or description text, e.g. 'Amazon'"),
-            since: z.string().optional().describe("Only transactions on/after this date (YYYY-MM-DD)"),
+            since: z.string().regex(YMD).optional().describe("Only transactions on/after this date (YYYY-MM-DD)"),
+            until: z.string().regex(YMD).optional().describe("Only transactions on/before this date (YYYY-MM-DD)"),
+            date_field: z
+                .enum(["date", "original_date"])
+                .optional()
+                .describe("Which date since/until apply to (default date). original_date is filtered here rather than by Rocket Money, which only filters on date: it finds transactions moved LATER than their posted date, but misses any moved to before `since`"),
             account_ids: z
                 .array(z.string())
                 .optional()
                 .describe("Only these accounts. Account node ids from list_accounts; omit for all accounts"),
+            category_ids: z
+                .array(z.string())
+                .optional()
+                .describe("Only these categories: labels, numeric ids or category node ids (see list_categories)"),
+            limit: z.number().int().min(1).max(10000).optional().describe("Max rows to return (default 1200)"),
+            cursor: z.string().optional().describe("next_cursor from a previous call, to fetch the next rows"),
         },
         annotations: READ,
-    }, tool(async ({ query, since, account_ids }) => {
-        const txns = await rm.searchTransactions(query ?? null, since ?? null, 6, account_ids ?? []);
-        const { labels, warning } = txns.length ? await accountLabelsOrIds() : { labels: new Map() };
-        return {
-            count: txns.length,
-            ...(warning ? { warning } : {}),
-            transactions: txns.map((t) => ({
-                id: t.nodeId,
-                date: t.date,
-                amount: fmt.usd(t.amountCents),
-                name: t.name,
-                category: t.categoryLabel,
-                account: t.accountId ? (labels.get(t.accountId) ?? t.accountId) : null,
-                note: t.note,
-            })),
-        };
+    }, tool(async (args) => {
+        const byOriginal = args.date_field === "original_date";
+        const categoryIds = await Promise.all((args.category_ids ?? []).map((c) => rm.resolveCategoryNodeId(c)));
+        const page = await rm.searchTransactionsPage({
+            query: args.query ?? null,
+            gteDate: args.since ?? null,
+            // ltDate is exclusive. By original_date there is no server upper bound:
+            // a transaction posted in the window may have been moved later.
+            ltDate: !byOriginal && args.until ? shiftYmd(args.until, 1) : null,
+            accountIds: args.account_ids ?? [],
+            categoryIds,
+            cursor: args.cursor ?? null,
+            limit: args.limit ?? 1200,
+        });
+        const txns = byOriginal
+            ? page.transactions.filter((t) => (!args.since || t.originalDate >= args.since) && (!args.until || t.originalDate <= args.until))
+            : page.transactions;
+        return { count: txns.length, next_cursor: page.nextCursor, ...(await shapeTxns(txns)) };
     }));
     server.registerTool("category_transactions", {
         title: "Transactions in a category",
-        description: "List this month's transactions within one spending category. Pass the category node id (from spending_summary/budgets categories, or a base64 TransactionCategory id).",
+        description: "List the transactions in one category, this month by default. Pass the category as a label, numeric id or node id (see list_categories). " +
+            ROW_FIELDS,
         inputSchema: {
-            category_id: z.string().describe("The TransactionCategory node id"),
+            category_id: z.string().describe("The category: a label like 'Groceries', a numeric id, or a TransactionCategory node id"),
+            since: z.string().regex(YMD).optional().describe("On/after this date (YYYY-MM-DD); default the 1st of this month"),
+            until: z.string().regex(YMD).optional().describe("On/before this date (YYYY-MM-DD); default today and later"),
         },
         annotations: READ,
-    }, tool(async ({ category_id }) => {
-        const data = await rm.getCategoryTransactions(category_id);
-        const nodes = [];
-        rm.collectByType(data, "Transaction", nodes);
-        // The 2026-10-27 query references each transaction twice (once with only
-        // id/amount/date), so merge by id rather than listing both copies.
-        const byId = new Map();
-        for (const o of nodes)
-            byId.set(o.id, { ...o, ...byId.get(o.id) });
-        const txns = [...byId.values()];
-        return {
-            count: txns.length,
-            transactions: txns.map((o) => ({
-                id: o.id,
-                date: o.date,
-                amount: fmt.usd(o.amount),
-                name: o.longName ?? o.shortName,
-                note: o.note ?? null,
-            })),
-        };
+    }, tool(async ({ category_id, since, until }) => {
+        const now = new Date();
+        const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+        const page = await rm.searchTransactionsPage({
+            categoryIds: [await rm.resolveCategoryNodeId(category_id)],
+            gteDate: since ?? monthStart,
+            ltDate: until ? shiftYmd(until, 1) : null,
+            limit: 2000,
+        });
+        return { count: page.transactions.length, ...(await shapeTxns(page.transactions)) };
     }));
     server.registerTool("list_categories", {
         title: "List spending categories",
@@ -339,7 +361,8 @@ export function buildServer() {
     }));
     server.registerTool("list_rules", {
         title: "List transaction rules",
-        description: "Every transaction rule (Rocket Money's 'Edit Rule'): its id, match conditions, the updates it applies (category, rename, ignore, tax deductible), and how many transactions it currently matches. Amounts in USD; dates YYYY-MM-DD.",
+        description: "Every transaction rule (Rocket Money's 'Edit Rule'): its id, match conditions, the updates it applies (category, rename, ignore, tax deductible), and how many transactions it currently matches. Amounts in USD; dates YYYY-MM-DD. " +
+            RULE_PRECEDENCE,
         inputSchema: {},
         annotations: READ,
     }, tool(async () => {
@@ -357,7 +380,7 @@ export function buildServer() {
     }, tool(async ({ rule_id, sample_size }) => {
         const rule = await rules.getRule(rule_id);
         const { count, sample } = await rules.previewMatches(rule.matchRulesInput, sample_size ?? 20);
-        return { ...shapeRule(rule), matchedNow: count, sample: await shapeMatches(sample) };
+        return { ...shapeRule(rule), matchedNow: count, sample: await shapeTxns(sample) };
     }));
     server.registerTool("preview_rule", {
         title: "Preview a transaction rule",
@@ -370,7 +393,7 @@ export function buildServer() {
         annotations: READ,
     }, tool(async ({ conditions, sample_size }) => {
         const { count, sample } = await rules.previewMatches(rules.conditionsToInput(conditions), sample_size ?? 20);
-        return { matchedCount: count, sample: await shapeMatches(sample) };
+        return { matchedCount: count, sample: await shapeTxns(sample) };
     }));
     // ── Write tools (these MUTATE Rocket Money) ──────────────────────
     // ROCKETMONEY_READ_ONLY=1 stops here: the write tools are never registered,
@@ -542,6 +565,106 @@ export function buildServer() {
             ok: true,
         };
     }));
+    server.registerTool("set_transaction_ignore", {
+        title: "Ignore transactions",
+        description: "WRITES to Rocket Money: set the ignore state on a batch of transactions in one call, without a rule. none = counted normally; budget = left out of budgets; everything = left out of all spending and charts (e.g. transfers between your own accounts). Pass the transaction ids from search_transactions. Returns updatedCount as reported by Rocket Money.",
+        inputSchema: {
+            transaction_ids: z.array(z.string()).min(1).describe("Transaction node ids (the `id` from search_transactions)"),
+            ignore: z.enum(["none", "budget", "everything"]).describe("The ignore state to set"),
+        },
+        annotations: WRITE,
+    }, tool(async ({ transaction_ids, ignore }) => {
+        const updated = await rm.setTransactionsIgnored(transaction_ids, ignore === "none" ? null : ignore);
+        return { requested: transaction_ids.length, updatedCount: updated, ignore, ok: updated === transaction_ids.length };
+    }));
+    server.registerTool("set_transaction_date", {
+        title: "Change transaction dates",
+        description: "WRITES to Rocket Money: change the date of one or more transactions, e.g. to date a trip purchase to when the trip happens. Pass date as YYYY-MM-DD, or \"original\" to reset each transaction to the date its bank posted it. Rocket Money keeps the posted date as original_date through any number of changes. Its API changes one transaction per call, so a batch is sent one at a time; each result reports the saved date and original_date, or an error for that id.",
+        inputSchema: {
+            transaction_ids: z.array(z.string()).min(1).max(200).describe("Transaction node ids (the `id` from search_transactions)"),
+            date: z
+                .string()
+                .regex(/^(\d{4}-\d{2}-\d{2}|original)$/)
+                .describe("New date YYYY-MM-DD, or 'original' to reset to the posted date"),
+        },
+        annotations: WRITE,
+    }, tool(async ({ transaction_ids, date }) => {
+        const results = await rm.setTransactionsDate(transaction_ids, date);
+        const failed = results.filter((r) => r.error).length;
+        return {
+            requested: transaction_ids.length,
+            updatedCount: results.length - failed,
+            results: results.map((r) => ({ id: r.id, date: r.date || null, original_date: r.originalDate || null, ...(r.error ? { error: r.error } : {}) })),
+            ok: failed === 0,
+        };
+    }));
+    const CATEGORY_TYPE = z
+        .enum(["expense", "income", "ignored"])
+        .describe("expense = counted as spending; income = counted as earnings (only positive amounts); ignored = left out of everything");
+    const toCategoryType = (t) => (t === "income" ? "earning" : t);
+    const shapeCategory = (c) => ({
+        id: c.id,
+        nodeId: c.nodeId,
+        label: c.label,
+        type: c.categoryType === "earning" ? "income" : c.categoryType,
+        taxDeductible: c.taxDeductible,
+        icon: c.iconKey,
+        color: c.color,
+    });
+    server.registerTool("create_category", {
+        title: "Create a category",
+        description: "WRITES to Rocket Money: create a custom category. Returns its id and node id for set_transaction_category, set_transactions_category and rules. icon and color are optional (defaults: the web app's 'coffee' icon, gray).",
+        inputSchema: {
+            label: z.string().min(1).describe("Category name, e.g. 'Rent'"),
+            type: CATEGORY_TYPE,
+            tax_deductible: z.boolean().optional().describe("Mark its transactions tax deductible by default (default false)"),
+            icon: z.string().optional().describe("Rocket Money icon key (see list_categories' icon values), e.g. 'home'"),
+            color: z.string().optional().describe("CSS color, e.g. 'rgb(117, 117, 117)'"),
+        },
+        annotations: WRITE,
+    }, tool(async (a) => {
+        const cat = await rm.createCategory(a.label, toCategoryType(a.type), {
+            taxDeductible: a.tax_deductible,
+            iconKey: a.icon,
+            color: a.color,
+        });
+        return { category: shapeCategory(cat), ok: true };
+    }));
+    server.registerTool("update_category", {
+        title: "Update a category",
+        description: "WRITES to Rocket Money: rename a custom category or change its type, tax-deductible default, icon or color. Only custom categories can be changed; Rocket Money's default categories are fixed. Fields you omit keep their current values.",
+        inputSchema: {
+            category: z.string().describe("The category: label, numeric id or node id (see list_categories)"),
+            label: z.string().min(1).optional().describe("New name"),
+            type: CATEGORY_TYPE.optional(),
+            tax_deductible: z.boolean().optional(),
+            icon: z.string().optional(),
+            color: z.string().optional(),
+        },
+        annotations: WRITE,
+    }, tool(async (a) => {
+        const cat = await rm.updateCategory(a.category, {
+            label: a.label,
+            categoryType: a.type ? toCategoryType(a.type) : undefined,
+            taxDeductible: a.tax_deductible,
+            iconKey: a.icon,
+            color: a.color,
+        });
+        return { category: shapeCategory(cat), ok: true };
+    }));
+    server.registerTool("delete_category", {
+        title: "Delete a category",
+        description: "WRITES to Rocket Money: delete a custom category. Rocket Money itself would leave its transactions Uncategorized; pass reassign_to to move them all to another category first (the delete is skipped if any fail to move). Rules that set this category are not changed. Not reversible. Requires confirm=true.",
+        inputSchema: {
+            category: z.string().describe("The category to delete: label, numeric id or node id"),
+            reassign_to: z.string().optional().describe("Move its transactions to this category first: label, numeric id or node id"),
+            confirm: z.literal(true).describe("Must be true"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    }, tool(async ({ category, reassign_to }) => {
+        const r = await rm.deleteCategory(category, reassign_to);
+        return { deleted: shapeCategory(r.deleted), reassignedCount: r.reassigned, reassignedTo: r.reassignedTo, ok: true };
+    }));
     const APPLY_TO_EXISTING = "Rocket Money has no 'future transactions only' switch: saving a rule always applies it to every transaction it matches at that moment. " +
         "So with apply_to_existing=false the rule gets a date_from of tomorrow, so it matches nothing that has already posted, and the save is refused if a preview still finds a match. " +
         "With apply_to_existing=true (the default) there is no floor, and the response's existingTransactionsUpdated is how many transactions Rocket Money applied the updates to.";
@@ -550,6 +673,8 @@ export function buildServer() {
         description: "WRITES to Rocket Money: create a transaction rule that applies `updates` to transactions matching `conditions`. Run preview_rule first. " +
             APPLY_TO_EXISTING +
             " `updates.category` is validated against list_categories. " +
+            RULE_PRECEDENCE +
+            " " +
             RULE_LIMITS,
         inputSchema: {
             conditions: ruleConditionsSchema,
@@ -575,6 +700,8 @@ export function buildServer() {
             "Saving re-applies the rule to everything it matches, so with apply_to_existing=false a rule that already matches any transaction is refused rather than saved. To change such a rule without touching past transactions, delete_rule (keeping its changes) and create_rule a replacement. " +
             APPLY_TO_EXISTING +
             " " +
+            RULE_PRECEDENCE +
+            " " +
             RULE_LIMITS,
         inputSchema: {
             rule_id: z.string().describe("The rule id (the `id` from list_rules)"),
@@ -597,7 +724,7 @@ export function buildServer() {
     }));
     server.registerTool("delete_rule", {
         title: "Delete a transaction rule",
-        description: "WRITES to Rocket Money: delete a transaction rule so it stops applying to future transactions. By default the changes it already made stay in place; undo_changes=true also reverts them on every transaction it matched (the web app's 'Undo Changes').",
+        description: "WRITES to Rocket Money: delete a transaction rule so it stops applying to future transactions. By default the changes it already made stay in place; undo_changes=true also reverts them on every transaction it matched (the web app's 'Undo Changes') - back to the transaction's original values, even where another matching rule sets the same field, so re-save that rule afterwards (update_rule with no changes).",
         inputSchema: {
             rule_id: z.string().describe("The rule id (the `id` from list_rules)"),
             undo_changes: z

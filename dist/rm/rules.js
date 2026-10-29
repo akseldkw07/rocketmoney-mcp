@@ -1,4 +1,4 @@
-import { rmFullText } from "./client.js";
+import { rmFullText, toRMTransaction } from "./client.js";
 // Transaction rules (Settings -> Transaction Rules, or "Edit Rule" on a
 // transaction). Every operation here sends its own query text rather than a
 // persisted hash, so a hash rotation can't break them. Operation names, input
@@ -68,10 +68,16 @@ const RULES_SEARCH = `query TransactionRulesSearch($matchRules: MatchRulesInput!
           node {
             id
             date
+            posted_date
             amount
+            shortName
             longName(prependCustomName: false)
+            custom_name
+            note
             category { id label __typename }
             account { id __typename }
+            ignoredFrom
+            transactionRuleNodeIds
             __typename
           }
           __typename
@@ -339,14 +345,9 @@ export async function previewMatches(matchRules, first = 20) {
     const rt = data.viewer?.ruleTransactions;
     return {
         count: rt?.numMatchingTransactions ?? 0,
-        sample: (rt?.transactions?.edges ?? []).map(({ node: n }) => ({
-            id: String(n.id),
-            date: String(n.date ?? ""),
-            amountCents: typeof n.amount === "number" ? n.amount : 0,
-            name: String(n.longName ?? ""),
-            categoryLabel: n.category?.label ?? null,
-            accountId: n.account?.id ?? null,
-        })),
+        sample: (rt?.transactions?.edges ?? [])
+            .map(({ node }) => toRMTransaction(node))
+            .filter((t) => t !== null),
     };
 }
 /** WRITE: create (no ruleId) or replace (ruleId) a rule. RM applies it to every current match. */
