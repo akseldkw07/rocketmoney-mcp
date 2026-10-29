@@ -5,8 +5,7 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
 ## Finish the current PR
 
 - [x] Merge PR #5 (`fix/hash-rotation-and-rules`).
-- [ ] Merge PR #7 (`fix/reported-bugs-and-sweep`): R1-R5 and the sweep. The post-merge hook
-      redeploys `main`.
+- [x] Merge PR #7 (`fix/reported-bugs-and-sweep`): R1-R5 and the sweep.
 - [ ] Reconnect the `rocketmoney` MCP server in other Claude sessions (`/mcp` → reconnect)
       so they see the new tools: rules, categories, `set_transaction_date`,
       `set_transaction_ignore`.
@@ -18,11 +17,14 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
       now re-probes every 10s. Confirm on the next full form login: the log should show
       `sid … not authenticated yet; re-checking every 10s` followed by `success`, not a
       timeout.
-- [ ] **Do rule saves overwrite manual edits?** Saving a rule re-applies overlapping rules
-      to their matches. Untested: whether that also overwrites a category or rename set by
-      hand on a matched transaction. This matters for the "fix exceptions by hand" advice.
-- [ ] **`delete_category` with `reassign_to` on a non-empty category.** Only tested on an
-      empty category.
+- [x] **Do rule saves overwrite manual edits?** *Yes, for the fields the rule sets
+      (tested 2026-10-29).* A rule that only renames left a hand-set category alone; once
+      it also set a category, re-saving it unchanged overwrote the hand-set category. And
+      `delete_rule` with `undo_changes` resets to the bank's original value, discarding hand
+      edits too. The rule tool descriptions now say so, and no longer suggest fixing
+      exceptions by hand while a matching rule sets that field.
+- [x] **`delete_category` with `reassign_to` on a non-empty category.** *Works (tested
+      2026-10-29): the transaction moved to the target, then the category was deleted.*
 - [ ] **Rule precedence.** No stable order found over 8 observations (not save order, id
       or specificity). The effective rule was always the last id in `applied_rule_ids`.
       Keep watching for a pattern; the tool descriptions say to avoid overlapping rules
@@ -39,6 +41,11 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
       *Partly answered 2026-10-29: calls now run 4 at a time (`ROCKETMONEY_MAX_CONCURRENCY`,
       set it to 1 to go back to one at a time) and a parallel burst of 8 tools kept the
       session live. Still open: what ends sessions every 30-60 min.*
+      *Likely answer 2026-10-29: an idle timeout of about 30 minutes, which the 30-minute
+      keepalive straddled. Overnight: re-login, keepalive ok (+30m), 401 (+60m), every hour;
+      a session in steady use lasted 4h15m. The keepalive is now 10 minutes (code default
+      and the launchd plist). Confirm: with it, an idle session should survive for hours,
+      with no "session died" in the log.*
 
 ## Backlog [other agent]
 

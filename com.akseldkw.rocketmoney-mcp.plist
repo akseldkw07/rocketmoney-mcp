@@ -33,7 +33,7 @@
         <string>/Applications/Google Chrome.app/Contents/MacOS/Google Chrome</string>
         <!-- 30 min instead of 2 h: keeps the session warm and retries a dead one sooner -->
         <key>ROCKETMONEY_KEEPALIVE_MS</key>
-        <string>1800000</string>
+        <string>600000</string>
         <key>ROCKETMONEY_STATE_DIR</key>
         <string>/Users/Akseldkw/Library/Application Support/rocketmoney-mcp</string>
     </dict>
