@@ -271,6 +271,39 @@ async function readSession(page: Page): Promise<{ sid: string | null; header: st
   }
 }
 
+// How long a sid that failed its probe waits before it is probed again.
+const REPROBE_MS = 10_000;
+
+/**
+ * Probe each candidate sid and seed the first live one. A sid that fails is
+ * re-probed after REPROBE_MS rather than written off: the session cookie does not
+ * rotate on every request (checked 2026-10-29), so the browser can hold one sid
+ * value for minutes, and the same value can turn valid later - picked up before
+ * the login finished, probed mid-callback, or failed on a network blip. Writing
+ * it off for good left a finished login (dashboard on screen) unaccepted until
+ * the 5-minute timeout, twice on 2026-10-29.
+ */
+export function makeSessionAcceptor(
+  probe: (header: string) => Promise<string | null>,
+  seed: (header: string) => void,
+  now: () => number = Date.now,
+): (s: { sid: string | null; header: string }) => Promise<boolean> {
+  const failedAt = new Map<string, number>();
+  return async (s) => {
+    if (!s.sid) return false;
+    const last = failedAt.get(s.sid);
+    if (last !== undefined && now() - last < REPROBE_MS) return false;
+    const live = await probe(s.header);
+    if (!live) {
+      if (last === undefined) console.log(`[auto-login] sid ${s.sid.slice(0, 8)}… not authenticated yet; re-checking every ${REPROBE_MS / 1000}s`);
+      failedAt.set(s.sid, now());
+      return false;
+    }
+    seed(live);
+    return true;
+  };
+}
+
 // ── The login run ──────────────────────────────────────────────────
 async function doLogin(reason: string, headless: boolean): Promise<LoginResult> {
   const profile = PROFILE_DIR();
@@ -346,21 +379,10 @@ async function doLogin(reason: string, headless: boolean): Promise<LoginResult> 
     await sleep(3000);
 
     // A tb.auth0.sid in the jar is NOT proof of a session: the profile keeps the
-    // last one it saw, long after it went stale (and the server rotating its copy
-    // stales the profile's). Accepting it seeded a dead cookie, which 401'd within
-    // minutes and set off another login. So every candidate is checked against the
-    // API once, and only a working (rotated) cookie is seeded.
-    const rejected = new Set<string>();
-    const acceptSession = async (s: { sid: string | null; header: string }): Promise<boolean> => {
-      if (!s.sid || rejected.has(s.sid)) return false;
-      const live = await probeSession(s.header);
-      if (!live) {
-        rejected.add(s.sid);
-        return false;
-      }
-      seedSession(live);
-      return true;
-    };
+    // last one it saw, long after it went stale. Accepting it seeded a dead cookie,
+    // which 401'd within minutes and set off another login. So every candidate is
+    // checked against the API, and only a working cookie is seeded.
+    const acceptSession = makeSessionAcceptor(probeSession, seedSession);
 
     // Path 1: trusted profile silently renewed -> already have a session.
     if (await acceptSession(await readSession(page))) {
