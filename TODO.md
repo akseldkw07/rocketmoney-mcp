@@ -250,7 +250,7 @@ then A2-A4 (need the rotation investigation and more care), then E.
       `categories.ts`, with `client.ts` keeping the persisted reads, subscriptions and
       assets and re-exporting the rest, so `import * as rm from "./rm/client.js"` keeps
       working.
-- [ ] **F6. `mcp.ts` is 1,026 lines, one function registering 33 tools.** *Fix:* one file
+- [x] **F6. `mcp.ts` is 1,026 lines, one function registering 33 tools.** *Fix:* one file
       per domain under `src/tools/` (accounts and reads, transactions, categories, rules,
       subscriptions and assets), plus shared helpers (`tool()`, annotations, batch
       results); `buildServer()` calls each register function.
