@@ -74,8 +74,8 @@ From README's TODO section:
 
 ## Venmo MCP [Venmo agent]
 
-- [ ] `request_money` swallows the Venmo API error ("Error executing tool request_money")
-      and doesn't return the new request's id.
+- [x] `request_money` swallows the Venmo API error ("Error executing tool request_money")
+      and doesn't return the new request's id. *Fixed by the Venmo agent, 2026-10-29.*
 
 ## Bugs reported by the categorization agent (verified locally 2026-10-29)
 
