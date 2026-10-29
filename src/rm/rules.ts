@@ -1,5 +1,7 @@
-import { rmFullText, toRMTransaction, TRANSACTION_FIELDS, type RMTransaction } from "./client.js";
+import { collectPages, rmFullText } from "./graphql.js";
+import { toRMTransaction, TRANSACTION_FIELDS, type RMTransaction } from "./transactions.js";
 import { addDaysYmd, ymd } from "./windows.js";
+import { toCents } from "./format.js";
 
 // Transaction rules (Settings -> Transaction Rules, or "Edit Rule" on a
 // transaction). Every operation here sends its own query text rather than a
@@ -181,7 +183,6 @@ export interface RMRule {
   matchRulesInput: MatchRulesV1Input;
 }
 
-const toCents = (usd: number) => Math.round(usd * 100);
 const fromCents = (v: number | string) => (typeof v === "number" ? v / 100 : null);
 const dateToIso = (ymd: string) => `${ymd}T00:00:00.000Z`;
 const isoToDate = (v: number | string) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
@@ -388,21 +389,21 @@ export function withFutureFloor(c: RuleConditions, now = new Date()): RuleCondit
 // ── API calls ──────────────────────────────────────────────────────
 
 export async function listRules(): Promise<RMRule[]> {
-  const rules: RMRule[] = [];
-  let cursor: string | null = null;
-  for (let page = 0; page < 20; page++) {
-    const data: { viewer?: { transactionRules?: Record<string, unknown> } } = await rmFullText(
-      "TransactionRulesPage",
-      RULES_PAGE,
-      { first: 100, cursor },
-    );
-    const conn = data.viewer?.transactionRules as
-      | { edges?: { node: Record<string, unknown> }[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string } }
-      | undefined;
-    for (const e of conn?.edges ?? []) rules.push(parseRule(e.node));
-    if (!conn?.pageInfo?.hasNextPage || !conn.pageInfo.endCursor) break;
-    cursor = conn.pageInfo.endCursor;
-  }
+  const rules = await collectPages(async (cursor) => {
+    const data = await rmFullText<{
+      viewer?: {
+        transactionRules?: {
+          edges?: { node: Record<string, unknown> }[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string };
+        };
+      };
+    }>("TransactionRulesPage", RULES_PAGE, { first: 100, cursor });
+    const conn = data.viewer?.transactionRules;
+    return {
+      items: (conn?.edges ?? []).map((e) => parseRule(e.node)),
+      next: conn?.pageInfo?.hasNextPage ? (conn.pageInfo.endCursor ?? null) : null,
+    };
+  });
   liveIdCache = { at: Date.now(), ids: new Set(rules.map((r) => r.id)) };
   return rules;
 }

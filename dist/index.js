@@ -74,10 +74,12 @@ const methodNotAllowed = (_req, res) => res.status(405).json({ jsonrpc: "2.0", e
 app.get("/mcp", methodNotAllowed);
 app.delete("/mcp", methodNotAllowed);
 // ── Keepalive ──────────────────────────────────────────────────────
-// RM's cookie rolls ~every 3h48m and there's no offline refresh token, so ping
-// RefreshAuthToken periodically to keep a live session warm until Auth0's
-// absolute cap kills it. Harmless when there's no session (skips quietly).
-const KEEPALIVE_MS = Number(process.env.ROCKETMONEY_KEEPALIVE_MS ?? 2 * 60 * 60 * 1000); // 2h
+// There's no offline refresh token, so ping RefreshAuthToken to keep a live
+// session from idling out. The idle limit looks like ~30 minutes: with a
+// 30-minute keepalive, overnight sessions went re-login -> keepalive ok (+30m) ->
+// 401 (+60m), every hour, while a session in active use lasted 4h15m
+// (2026-10-29). So ping well inside it. Harmless when there's no session.
+const KEEPALIVE_MS = Number(process.env.ROCKETMONEY_KEEPALIVE_MS ?? 10 * 60 * 1000); // 10m
 async function keepalive() {
     // Dead/missing session: fall back to a headless re-login (rate-limited + backed
     // off inside attemptLogin, so this can safely run every keepalive tick). A cold

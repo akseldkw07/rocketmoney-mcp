@@ -1,9 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { seedSession } from "../src/rm/session.js";
+import { freshSession, mockGraphQL, realFetch, type GraphQLBody } from "./helpers.js";
 import {
   conditionsToInput,
   createRule,
@@ -175,14 +172,10 @@ test("withFutureFloor raises date_from to tomorrow and refuses a past date_to", 
 
 // ── Write paths against a fake API ──────────────────────────────────
 
-const realFetch = globalThis.fetch;
-let sent: { operationName: string; variables: Record<string, unknown> }[] = [];
+let sent: GraphQLBody[] = [];
 
 function fakeApi(previewCount: number, rules: unknown[] = []) {
-  sent = [];
-  globalThis.fetch = (async (_url: string, init: { body: string }) => {
-    const body = JSON.parse(init.body);
-    sent.push(body);
+  sent = mockGraphQL((body) => {
     const data: Record<string, unknown> = {
       TransactionRulesPage: {
         viewer: { transactionRules: { edges: rules.map((node) => ({ node })), pageInfo: { hasNextPage: false } } },
@@ -197,16 +190,12 @@ function fakeApi(previewCount: number, rules: unknown[] = []) {
         },
       },
     };
-    return new Response(JSON.stringify({ data: data[body.operationName] }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }) as typeof fetch;
+    return { data: data[body.operationName!] };
+  });
 }
 
 beforeEach(() => {
-  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-rules-"));
-  seedSession("tb.auth0.sid=test");
+  freshSession();
 });
 afterEach(() => {
   globalThis.fetch = realFetch;

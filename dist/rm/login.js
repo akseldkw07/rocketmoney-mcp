@@ -4,7 +4,7 @@ import { addExtra } from "puppeteer-extra";
 import Stealth from "puppeteer-extra-plugin-stealth";
 import vanilla from "rebrowser-puppeteer-core";
 import { seedSession, sessionStatus } from "./session.js";
-import { probeSession } from "./client.js"; // circular; runtime-only use
+import { probeSession } from "./graphql.js"; // circular; runtime-only use
 // Auth0/Cloudflare bot-detection flags plain headless Chromium (the CDP
 // Runtime.enable leak + navigator.webdriver + headless signals). rebrowser-
 // puppeteer-core patches the CDP leak; the stealth plugin patches the fingerprint;

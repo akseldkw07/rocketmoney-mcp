@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RMAuthError, retryAfterRelogin } from "../src/rm/client.js";
+import { RMAuthError, retryAfterRelogin } from "../src/rm/graphql.js";
 
 test("retryAfterRelogin re-runs the request once after a successful re-login", async () => {
   let calls = 0;

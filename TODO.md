@@ -5,40 +5,54 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
 ## Finish the current PR
 
 - [x] Merge PR #5 (`fix/hash-rotation-and-rules`).
-- [ ] Merge PR #7 (`fix/reported-bugs-and-sweep`): R1-R5 and the sweep. The post-merge hook
-      redeploys `main`.
-- [ ] Reconnect the `rocketmoney` MCP server in other Claude sessions (`/mcp` → reconnect)
-      so they see the new tools: rules, categories, `set_transaction_date`,
-      `set_transaction_ignore`.
+- [x] Merge PR #7 (`fix/reported-bugs-and-sweep`): R1-R5 and the sweep.
+- [ ] Merge PR #8 (`chore/lingering-and-cleanup`): 10-minute keepalive, rule/hand-edit
+      findings, second sweep (F1-F6).
+- [ ] After a deploy that changes tool parameters, start a new conversation with any agent
+      that uses these tools (an existing chat keeps the definitions it already loaded).
 
 ## Verify in real use
 
+- [ ] **Keepalive fix (sessions dying every 30-60 min).** Leave the server idle for a few
+      hours (no deploys, no tool calls: both reset the idle clock). A monitor logs each
+      re-login to `session-watch.log` in the 2026-10-29 session's scratchpad. *Pass:* only
+      the two "watch start" lines; with the old 30-minute keepalive there was a re-login
+      every hour. *Fail:* new lines; their timestamps give the real session lifetime. Then
+      stop the monitor: `pkill -f session-watch.log`.
 - [ ] **Login re-probe fix.** A finished form login went unaccepted for 5 minutes, twice on
       2026-10-29, because a session cookie that failed one probe was never re-probed. It
-      now re-probes every 10s. Confirm on the next full form login: the log should show
-      `sid … not authenticated yet; re-checking every 10s` followed by `success`, not a
-      timeout.
-- [ ] **Do rule saves overwrite manual edits?** Saving a rule re-applies overlapping rules
-      to their matches. Untested: whether that also overwrites a category or rename set by
-      hand on a matched transaction. This matters for the "fix exceptions by hand" advice.
-- [ ] **`delete_category` with `reassign_to` on a non-empty category.** Only tested on an
-      empty category.
+      now re-probes every 10s. Full form logins only happen when Rocket Money's own login
+      session expires. After the next one, run
+      `grep -A3 "credentials submitted" ~/Library/Logs/rocketmoney-mcp/server.log | tail -4`.
+      *Pass:* `success` within seconds, possibly after `sid … not authenticated yet;
+      re-checking every 10s`. *Fail:* a new `timed out without a session cookie` in
+      `server.err`. (One form login succeeded on 2026-10-29, probably after the fix; the log
+      has no timestamps to prove it. Forcing one means clearing the login profile's cookies
+      and may trigger an SMS code, so do it only with your phone at hand.)
+- [x] **Do rule saves overwrite manual edits?** *Yes, for the fields the rule sets
+      (tested 2026-10-29).* A rule that only renames left a hand-set category alone; once
+      it also set a category, re-saving it unchanged overwrote the hand-set category. And
+      `delete_rule` with `undo_changes` resets to the bank's original value, discarding hand
+      edits too. The rule tool descriptions now say so, and no longer suggest fixing
+      exceptions by hand while a matching rule sets that field.
+- [x] **`delete_category` with `reassign_to` on a non-empty category.** *Works (tested
+      2026-10-29): the transaction moved to the target, then the category was deleted.*
 - [ ] **Rule precedence.** No stable order found over 8 observations (not save order, id
       or specificity). The effective rule was always the last id in `applied_rule_ids`.
-      Keep watching for a pattern; the tool descriptions say to avoid overlapping rules
-      that set the same field.
+      Check on real data with the consistency check below (F7): on 2026-10-29 none of
+      9,081 transactions had two live rules setting different categories, so there was
+      nothing to judge. Re-run it if overlapping rules appear.
 
 ## Investigate
 
-- [ ] **The rolling-cookie premise is out of date.** `client.ts` serializes every call
-      (`rmChain`) because each response was said to rotate `tb.auth0.sid`. On 2026-10-29,
-      neither `AuthenticationCheck` nor `RefreshAuthToken` rotated it, and replaying an
-      old value still worked. Find out when it does rotate, and whether the serialization
-      and the 30-minute keepalive are still needed. Sessions still die every ~30-60 min
-      (`HTTP 401 on RefreshAuthToken`), so something else ends them.
-      *Partly answered 2026-10-29: calls now run 4 at a time (`ROCKETMONEY_MAX_CONCURRENCY`,
-      set it to 1 to go back to one at a time) and a parallel burst of 8 tools kept the
-      session live. Still open: what ends sessions every 30-60 min.*
+- [ ] **When does the session cookie rotate, and what ends a session?** On 2026-10-29
+      neither `AuthenticationCheck` nor `RefreshAuthToken` rotated `tb.auth0.sid`, replaying
+      an old value still worked, and calls now run 4 at a time (`ROCKETMONEY_MAX_CONCURRENCY`;
+      1 goes back to one at a time) without trouble. Likely cause of the hourly deaths: an
+      idle timeout of about 30 minutes that the old 30-minute keepalive straddled (overnight:
+      re-login, keepalive ok at +30m, 401 at +60m; a session in steady use lasted 4h15m).
+      The keepalive is now 10 minutes; see the keepalive check above. Still unknown: whether
+      there is also an absolute session lifetime (the old code comment said ~3h48m).
 
 ## Backlog [other agent]
 
@@ -58,14 +72,17 @@ From README's TODO section:
       deploy that changes a tool's parameters, start a new conversation (Claude Code:
       `/mcp` → reconnect, then a new session). Confirmed 2026-10-29: the server served the
       new `search_transactions` while an existing chat still saw the old one.
+- [ ] README: `PERSISTED` (the persisted-query hashes) moved from `src/rm/client.ts` to
+      `src/rm/graphql.ts` on 2026-10-29, and the refresh script now rewrites it there.
+      Update the README's mentions of `client.ts` for hashes.
 - [ ] README's `feat/generic-transaction-writes` item is done: the hash fix is merged and
       the branch was deleted 2026-10-29 (upstream keeps the gate-note commit). Remove it
       from README.
 
 ## Venmo MCP [Venmo agent]
 
-- [ ] `request_money` swallows the Venmo API error ("Error executing tool request_money")
-      and doesn't return the new request's id.
+- [x] `request_money` swallows the Venmo API error ("Error executing tool request_money")
+      and doesn't return the new request's id. *Fixed by the Venmo agent, 2026-10-29.*
 
 ## Bugs reported by the categorization agent (verified locally 2026-10-29)
 
@@ -219,3 +236,48 @@ probes on 2026-10-29.
 
 Suggested order: B1-B3 (bugs), D (dead code), A1 + A5 (cheap, large wins), C1-C8,
 then A2-A4 (need the rotation investigation and more care), then E.
+
+## Follow-ups (open)
+
+- [ ] **F7. `npm run check-rules`: rule precedence consistency check.** Read-only: lists
+      rules and all transactions, then for every transaction where two or more live rules
+      set different categories, compares its actual category with the last and first rule
+      in `applied_rule_ids`. Reports counts and examples (and "neither" as likely hand
+      edits). The one-off version ran on 2026-10-29 with no conflicts found.
+- [ ] **F8. `/api/transactions` rows still use the old shape** (no `original_date`,
+      `ignore`, `account`; nulls included). Switch to the shared `rows.ts` shape once the
+      card gate on lockbox is updated to accept it; that's the one consumer.
+- [ ] **F9. `TransactionCategories` and the other 10 reads still use persisted hashes.**
+      They fall back to query text when a hash goes stale, so nothing breaks, but each
+      rotation costs a failed request per operation until `npm run refresh-hashes` runs.
+      Option: send query text first for reads, as search and rules already do, and drop
+      `PERSISTED` and the HAR workflow. Trade-off: requests no longer look like the web
+      app's.
+- [ ] **F10. Timestamped logs would close two checks** (keepalive and login re-probe)
+      from the log alone. That's the backlog item "Timestamp the server log" [other agent];
+      worth doing first.
+
+## Second sweep (2026-10-29, after PR #7)
+
+- [x] **F1. Dollars to cents in three places.** `Math.round(x * 100)` in mcp.ts
+      (`update_subscription`, `set_asset_value`) and `toCents` in rules.ts; `/api/budget`
+      hand-rolls cents to dollars instead of `usd()`. *Fix:* `toCents()` beside `usd()` in
+      format.ts, used everywhere.
+- [x] **F2. Two cursor-paging loops.** `searchAllTransactions` and `listRules` each walk
+      pages by hand (and `listRules` caps at 20 pages). *Fix:* one `collectPages()` helper.
+- [x] **F3. Two note-writing paths.** `setTransactionNote` (one id, its own mutation text)
+      and `setTransactionsNote` (batched). *Fix:* `set_transaction_note` uses the batch
+      path; delete the single-id function.
+- [x] **F4. Test fetch mocks repeated 11 times** across three test files, each rebuilding
+      the `Response` and seeding a session by hand. *Fix:* `test/helpers.ts` with
+      `mockGraphQL(handler)` and `freshSession()`.
+- [x] **F5. `client.ts` is 1,329 lines of five concerns:** transport (headers, executor,
+      concurrency, re-login, errors, batching), persisted reads, subscriptions,
+      transactions and categories. *Fix:* split into `graphql.ts`, `transactions.ts` and
+      `categories.ts`, with `client.ts` keeping the persisted reads, subscriptions and
+      assets and re-exporting the rest, so `import * as rm from "./rm/client.js"` keeps
+      working.
+- [x] **F6. `mcp.ts` is 1,026 lines, one function registering 33 tools.** *Fix:* one file
+      per domain under `src/tools/` (accounts and reads, transactions, categories, rules,
+      subscriptions and assets), plus shared helpers (`tool()`, annotations, batch
+      results); `buildServer()` calls each register function.

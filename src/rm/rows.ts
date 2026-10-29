@@ -1,7 +1,8 @@
 // Transaction rows as callers see them, shared by the MCP tools and the /api
 // feed so both describe a transaction the same way.
 
-import { RMAuthError, rmFullText, type RMTransaction } from "./client.js";
+import { RMAuthError, rmFullText } from "./graphql.js";
+import type { RMTransaction } from "./transactions.js";
 import { accountLabel, usd } from "./format.js";
 import { liveRuleIds } from "./rules.js";
 

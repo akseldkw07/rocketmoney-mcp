@@ -1,4 +1,4 @@
-// Re-sync src/rm/client.ts with the Rocket Money web app after a hash rotation.
+// Re-sync src/rm/graphql.ts (PERSISTED) with the Rocket Money web app after a hash rotation.
 //
 //   npm run refresh-hashes -- <file.har> [more.har ...]
 //     Rewrites PERSISTED from every operationName -> sha256Hash pair the HAR
@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const CLIENT_TS = join(ROOT, "src/rm/client.ts");
+const GRAPHQL_TS = join(ROOT, "src/rm/graphql.ts");
 const QUERY_TEXT_TS = join(ROOT, "src/rm/query-text.ts");
 const APP = "https://app.rocketmoney.com";
 
@@ -75,10 +75,10 @@ export interface RewriteReport {
   notInPersisted: string[];
 }
 
-/** Rewrite the PERSISTED block's hashes in client.ts source. */
+/** Rewrite the PERSISTED block's hashes in graphql.ts source. */
 export function rewritePersisted(source: string, hashes: Map<string, string>): RewriteReport {
   const block = /const PERSISTED = \{([\s\S]*?)\n\} as const;/.exec(source);
-  if (!block) throw new Error("Couldn't find `const PERSISTED = { ... } as const;` in client.ts");
+  if (!block) throw new Error("Couldn't find `const PERSISTED = { ... } as const;` in graphql.ts");
   const report: RewriteReport = { source, updated: [], unchanged: [], notCaptured: [], notInPersisted: [] };
   const known = new Set<string>();
   const body = block[1].replace(/^(\s+)(\w+):(\s*)"([0-9a-f]{64})"/gm, (line, indent, op, gap, old) => {
@@ -202,7 +202,7 @@ export function renderQueryText(docs: Map<string, string>, when: string): string
 // ── CLI ────────────────────────────────────────────────────────────
 
 async function main(args: string[]): Promise<void> {
-  const source = readFileSync(CLIENT_TS, "utf8");
+  const source = readFileSync(GRAPHQL_TS, "utf8");
   if (args[0] === "--bundle") {
     const wanted = new Set(persistedOps(source));
     const docs = new Map<string, string>();
@@ -227,7 +227,7 @@ async function main(args: string[]): Promise<void> {
     for (const [op, h] of extractHashes(JSON.parse(readFileSync(file, "utf8")))) hashes.set(op, h);
   }
   const r = rewritePersisted(source, hashes);
-  if (r.updated.length) writeFileSync(CLIENT_TS, r.source);
+  if (r.updated.length) writeFileSync(GRAPHQL_TS, r.source);
   for (const u of r.updated) console.log(`updated   ${u.op}: ${u.from.slice(0, 12)}… -> ${u.to.slice(0, 12)}…`);
   if (r.unchanged.length) console.log(`unchanged ${r.unchanged.join(", ")}`);
   if (r.notCaptured.length) console.log(`not in HAR ${r.notCaptured.join(", ")}`);

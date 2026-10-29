@@ -170,7 +170,7 @@ export async function budgetSnapshot(req: Request, res: Response): Promise<void>
     spending: () => rm.getSpending().then(fmt.shapeSpending),
     assets: () =>
       rm.getAssets().then((xs) =>
-        xs.map((a) => ({ name: a.name, value: Math.round(a.valueCents) / 100, type: a.assetType })),
+        xs.map((a) => ({ name: a.name, value: fmt.usd(a.valueCents), type: a.assetType })),
       ),
   };
   const body: Record<string, unknown> = { ok: true, as_of: new Date().toISOString() };

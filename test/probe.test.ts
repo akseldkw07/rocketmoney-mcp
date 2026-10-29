@@ -1,18 +1,14 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { probeSession } from "../src/rm/client.js";
+import { probeSession } from "../src/rm/graphql.js";
+import { jsonResponse, realFetch } from "./helpers.js";
 
-const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
 function respond(status: number, body: unknown, setCookies: string[] = []) {
-  globalThis.fetch = (async () => {
-    const headers = new Headers({ "content-type": "application/json" });
-    for (const sc of setCookies) headers.append("set-cookie", sc);
-    return new Response(JSON.stringify(body), { status, headers });
-  }) as typeof fetch;
+  globalThis.fetch = (async () => jsonResponse(body, status, setCookies)) as typeof fetch;
 }
 
 test("probeSession returns the rotated cookie header when the cookie is authenticated", async () => {
