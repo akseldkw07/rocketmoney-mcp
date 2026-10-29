@@ -96,7 +96,7 @@ probes on 2026-10-29.
 
 ### A. Throughput: how many requests a large read or write needs
 
-- [ ] **A1. Bigger search pages.** `searchTransactionsPage` fetches 200 rows per request.
+- [x] **A1. Bigger search pages.** `searchTransactionsPage` fetches 200 rows per request.
       Rocket Money accepts `first: 2500` (2,500 rows in 230ms, measured), so a
       10,000-transaction backfill takes 50 sequential requests where 4 would do.
       *Fix:* page size 1000 by default, tunable up to 2500; also apply it to
@@ -124,7 +124,7 @@ probes on 2026-10-29.
       *Fix:* keep the jar in memory and write the file only when a cookie value changes
       (plus `refreshedAt` at most once a minute). Load once at start-up and whenever
       `/auth` seeds a session.
-- [ ] **A5. Pretty-printed tool output.** `tool()` returns
+- [x] **A5. Pretty-printed tool output.** `tool()` returns
       `JSON.stringify(result, null, 2)`, which adds about 30-40% whitespace to every
       response, roughly tens of KB on a 1,200-row search. Rows also repeat empty fields
       (`custom_name: null`, `note: null`, `applied_rule_ids: []`).
@@ -140,16 +140,16 @@ probes on 2026-10-29.
 
 ### B. Correctness bugs found during the sweep
 
-- [ ] **B1. `set_transaction_category(apply_to_all=true)` can silently do nothing for
+- [x] **B1. `set_transaction_category(apply_to_all=true)` can silently do nothing for
       older transactions.** It looks the transaction up in the newest 200 rows only
       (`searchTransactions(null, null, 1)`). For anything older it falls back to updating
       just that one id and still returns success.
       *Fix:* read the name with one `node(id:)` lookup, then sweep by name with the
       bigger pages from A1.
-- [ ] **B2. Two missing spaces in the server instructions** ("...preview_rule).This
+- [x] **B2. Two missing spaces in the server instructions** ("...preview_rule).This
       server..." and "...future transactions).To recategorize"). These go into every
       client's context.
-- [ ] **B3. "type" means two things.** `list_categories` uses `type` for
+- [x] **B3. "type" means two things.** `list_categories` uses `type` for
       default/custom and `categoryType` for expense/earning/ignored. The new category
       tools use `type` for expense/income/ignored.
       *Fix:* one shape everywhere: `kind: default|custom` and
@@ -185,13 +185,13 @@ probes on 2026-10-29.
 
 ### D. Dead code to delete
 
-- [ ] `getCategoryTransactions` and the `TransactionCategoryPage` and
+- [x] `getCategoryTransactions` and the `TransactionCategoryPage` and
       `TransactionsPageTransactionTable` entries in `PERSISTED`, `CAPTURE_PAGE` and
       `query-text.ts`: nothing calls them since search and `category_transactions` moved
       to the full-text query. That's about 40% of `query-text.ts`.
-- [ ] `authStatus` and `ingestAuth` in `auth-page.ts`: their routes were removed in this
+- [x] `authStatus` and `ingestAuth` in `auth-page.ts`: their routes were removed in this
       build (goes with the backlog item on `extension/`).
-- [ ] Duplicate `sleep` helpers in `login.ts` and `auth-page.ts`.
+- [x] Duplicate `sleep` helpers in `login.ts` and `auth-page.ts`.
 
 ### E. Lower priority
 

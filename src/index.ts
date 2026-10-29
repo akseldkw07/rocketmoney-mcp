@@ -1,6 +1,6 @@
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { buildServer, READ_ONLY } from "./mcp.js";
+import { buildServer } from "./mcp.js";
 import { renderAuthPage, submitAuth, triggerLogin, postOtp, smsWebhook } from "./auth-page.js";
 import { refreshAuthToken } from "./rm/client.js";
 import { sessionStatus } from "./rm/session.js";

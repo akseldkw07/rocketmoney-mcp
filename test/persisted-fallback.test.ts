@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { seedSession } from "../src/rm/session.js";
-import { batchAliased, getBudgets, toRMTransaction } from "../src/rm/client.js";
+import { batchAliased, getBudgets, setTransactionCategory, toRMTransaction } from "../src/rm/client.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -75,6 +75,38 @@ test("batchAliased sends 50 aliases per request and keeps per-item failures to t
   assert.deepEqual(out[7], { ok: false, error: "An error occurred." });
   assert.deepEqual(out[8], { ok: true, data: { id: "t8" } });
   assert.deepEqual(out[59], { ok: true, data: { id: "t59" } });
+});
+
+test("apply_to_all reads the merchant name off the transaction, sweeps every page, and recategorizes all of them", async () => {
+  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-sweep-"));
+  seedSession("tb.auth0.sid=test");
+  const ops: { op: string; vars: Record<string, unknown> }[] = [];
+  globalThis.fetch = (async (_url: string, init: { body: string }) => {
+    const b = JSON.parse(init.body);
+    ops.push({ op: b.operationName, vars: b.variables });
+    const node = (id: string) => ({ __typename: "Transaction", id, amount: 100, date: "2020-01-01" });
+    const data =
+      b.operationName === "TransactionName"
+        ? { node: { id: "old", longName: "ACME CO" } }
+        : b.operationName === "TransactionSearch"
+          ? {
+              viewer: {
+                transactions: b.variables.cursor
+                  ? { edges: [{ node: node("t3") }], pageInfo: { hasNextPage: false, endCursor: null } }
+                  : { edges: [{ node: node("t1") }, { node: node("t2") }], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+              },
+            }
+          : { setTransactionsCategory: { countUpdated: (b.variables.input.transactionNodeIds as string[]).length } };
+    return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  assert.equal(await setTransactionCategory("old", "cat", true), 4);
+  assert.deepEqual(ops.map((o) => o.op), ["TransactionName", "TransactionSearch", "TransactionSearch", "SetTransactionsCategory"]);
+  assert.equal(ops[1].vars.query, "ACME CO");
+  assert.deepEqual(
+    (ops[3].vars.input as { transactionNodeIds: string[] }).transactionNodeIds.sort(),
+    ["old", "t1", "t2", "t3"],
+  );
 });
 
 test("a rotated persisted hash falls back to the bundled query text", async () => {

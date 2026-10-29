@@ -8,7 +8,7 @@ import { lookbackSince, LOOKBACK_DAYS, validSlug } from "./rm/feeds.js";
 
 // ── Token-guarded JSON API: "the last N days of transactions" ──────
 //
-// Sibling of /mcp, not a client of it: both call rm.searchTransactions() over
+// Sibling of /mcp, not a client of it: both read transactions through rm.client over
 // the same persisted cookie jar. Routing a machine caller back out through the
 // MCP JSON-RPC envelope would buy nothing but a round trip.
 //
@@ -113,7 +113,7 @@ export async function newTransactions(req: Request, res: Response): Promise<void
   const since = lookbackSince(lastScanned);
 
   try {
-    const found = await rm.searchTransactions(null, since);
+    const found = await rm.searchAllTransactions({ gteDate: since });
     // Oldest first: the window reads chronologically, like a statement.
     found.sort((a, b) => (a.date === b.date ? a.nodeId.localeCompare(b.nodeId) : a.date < b.date ? -1 : 1));
 

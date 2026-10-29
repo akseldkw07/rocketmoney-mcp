@@ -54,9 +54,6 @@ const PERSISTED = {
   RecurringPage: "0026a77fc626a68877701731ac1269584c9b57881283dcaa0923372163668e1c",
   SubscriptionDetailPage: "9556941e4ff9bdc23d43801774a45e8dc01b67b547aab774abcd9815bb5b0f3c",
   RecurringUpcomingPage: "f1dd34f01b69dd0367a8b20a07b8b45977ab6d1ce0d31919b1b4143e5ba205bc",
-  TransactionCategoryPage: "e69fb63dcf0c3ef5b9bd1622d03792b1798a75ea397d901b98b68a4e0d76b025",
-  TransactionsPageTransactionTable:
-    "5bc74a0e8d2c33efe103eeb87d6ec09d9b57fb34795597ef2e3f7d892d76a056",
   // The user's full category catalog (default + custom), with node ids. Captured
   // from app.rocketmoney.com.har (2026-07-05). Read-only; rotating is handled the
   // same as any other persisted read (PersistedQueryNotFound -> re-capture).
@@ -759,24 +756,6 @@ export async function getUpcoming(days = 28): Promise<Record<string, unknown>> {
   });
 }
 
-/** Transactions inside one category for the current month. */
-export async function getCategoryTransactions(
-  categoryNodeId: string,
-  pageSize = 200,
-): Promise<Record<string, unknown>> {
-  const w = monthWindows();
-  return rmGraphQL({
-    operationName: "TransactionCategoryPage",
-    variables: {
-      id: categoryNodeId,
-      pageSize,
-      startOfCurrentTimePeriod: w.currentMonthStart,
-      endOfCurrentTimePeriod: w.nextMonthStart,
-      transactionCategoryNodeId: categoryNodeId,
-    },
-  });
-}
-
 export interface RMTransaction {
   nodeId: string;
   amountCents: number;
@@ -848,6 +827,17 @@ const TRANSACTION_SEARCH = `query TransactionSearch($query: String, $order: Stri
   }
 }`;
 
+/**
+ * Rows per search request. RM accepts up to 2,500 (2,500 rows in 230ms,
+ * 2026-10-29); 1,000 keeps each response well under a few MB with full fields
+ * while cutting a 10,000-row backfill from 50 requests to 10.
+ */
+export const PAGE_SIZE = 1000;
+/** Rows a search returns when the caller doesn't say. */
+export const DEFAULT_SEARCH_LIMIT = 1200;
+/** Rows per searchTransactionsPage call when walking a whole result set by cursor. */
+const SCAN_PAGE_LIMIT = 10_000;
+
 export interface SearchOptions {
   query?: string | null;
   /** On/after this date (YYYY-MM-DD). */
@@ -860,7 +850,7 @@ export interface SearchOptions {
   categoryIds?: string[];
   /** Resume from a previous page's nextCursor. */
   cursor?: string | null;
-  /** Stop after this many rows (rounded up to a whole 200-row page). */
+  /** Stop after this many rows (default DEFAULT_SEARCH_LIMIT). */
   limit?: number;
 }
 
@@ -873,7 +863,7 @@ export async function searchTransactionsPage(
   opts: SearchOptions,
 ): Promise<{ transactions: RMTransaction[]; nextCursor: string | null }> {
   const all: RMTransaction[] = [];
-  const limit = opts.limit ?? 1200;
+  const limit = opts.limit ?? DEFAULT_SEARCH_LIMIT;
   let cursor = opts.cursor ?? null;
   let nextCursor: string | null = null;
 
@@ -886,7 +876,8 @@ export async function searchTransactionsPage(
       gteDate: opts.gteDate ?? null,
       ltDate: opts.ltDate ?? null,
       cursor,
-      pageSize: 200,
+      // Never ask for more than the caller still needs.
+      pageSize: Math.min(PAGE_SIZE, limit - all.length),
     });
 
     const nodes: Record<string, unknown>[] = [];
@@ -910,22 +901,16 @@ export async function searchTransactionsPage(
   };
 }
 
-/**
- * Search transactions matching `query` (optional) on/after `gteDate`
- * (YYYY-MM-DD, optional), up to maxPages pages of 200.
- *
- * `accountIds` takes Account node ids (the same base64 ids getAccounts returns);
- * empty means every account. Without it there is no way to tell which card a
- * charge landed on, since the merchant descriptor alone does not identify the
- * account.
- */
-export async function searchTransactions(
-  query: string | null,
-  gteDate: string | null,
-  maxPages = 6,
-  accountIds: string[] = [],
-): Promise<RMTransaction[]> {
-  return (await searchTransactionsPage({ query, gteDate, accountIds, limit: maxPages * 200 })).transactions;
+/** Every transaction matching `opts`, walking the cursor to the end (no row limit). */
+export async function searchAllTransactions(opts: Omit<SearchOptions, "cursor" | "limit">): Promise<RMTransaction[]> {
+  const all: RMTransaction[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = await searchTransactionsPage({ ...opts, cursor, limit: SCAN_PAGE_LIMIT });
+    all.push(...page.transactions);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return all;
 }
 
 /**
@@ -1171,16 +1156,8 @@ export async function deleteCategory(
   if (reassignTo) {
     target = await resolveCategoryNodeId(reassignTo);
     if (target === cat.nodeId) throw new Error("reassign_to is the category being deleted.");
-    const ids: string[] = [];
-    let cursor: string | null = null;
-    do {
-      const page = await searchTransactionsPage({ categoryIds: [cat.nodeId], cursor, limit: 2000 });
-      ids.push(...page.transactions.map((t) => t.nodeId));
-      cursor = page.nextCursor;
-    } while (cursor);
-    for (let i = 0; i < ids.length; i += 500) {
-      reassigned += await setTransactionsCategory(ids.slice(i, i + 500), target);
-    }
+    const ids = (await searchAllTransactions({ categoryIds: [cat.nodeId] })).map((t) => t.nodeId);
+    reassigned = await setTransactionsCategoryChunked(ids, target);
     if (reassigned < ids.length) {
       throw new Error(
         `Not deleted: moved only ${reassigned} of ${ids.length} transactions out of "${cat.label}". Nothing was deleted; retry or move the rest by hand.`,
@@ -1268,12 +1245,26 @@ export async function setTransactionCategory(
 ): Promise<number> {
   if (!applyToAll) return setTransactionsCategory([nodeId], catNodeId);
 
-  const self = (await searchTransactions(null, null, 1)).find((t) => t.nodeId === nodeId);
-  if (!self?.name) return setTransactionsCategory([nodeId], catNodeId);
+  // Read the merchant name off the transaction itself: scanning recent rows for
+  // it missed anything older than the newest 200 and silently updated only one.
+  const self = await rmFullText<{ node?: { longName?: string | null } }>(
+    "TransactionName",
+    "query TransactionName($id: ID!) {\n  node(id: $id) {\n    id\n    ... on Transaction {\n      longName(prependCustomName: false)\n    }\n    __typename\n  }\n}",
+    { id: nodeId },
+  );
+  const name = self.node?.longName;
+  if (!name) throw new Error(`No transaction "${nodeId}" (or it has no name to match the rest of the merchant on).`);
 
-  const related = await searchTransactions(self.name, null, 6);
+  const related = await searchAllTransactions({ query: name });
   const ids = new Set<string>([nodeId, ...related.map((t) => t.nodeId)]);
-  return setTransactionsCategory([...ids], catNodeId);
+  return setTransactionsCategoryChunked([...ids], catNodeId);
+}
+
+/** setTransactionsCategory in 500-id chunks, for sweeps that can match thousands. */
+async function setTransactionsCategoryChunked(nodeIds: string[], catNodeId: string): Promise<number> {
+  let updated = 0;
+  for (let i = 0; i < nodeIds.length; i += 500) updated += await setTransactionsCategory(nodeIds.slice(i, i + 500), catNodeId);
+  return updated;
 }
 
 export { findByType, collectByType };

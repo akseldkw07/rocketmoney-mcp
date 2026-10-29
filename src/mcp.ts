@@ -32,6 +32,25 @@ function tool<T>(fn: (args: T) => Promise<unknown>) {
 const READ = { readOnlyHint: true, openWorldHint: true } as const;
 
 /**
+ * One category, the same shape from list_categories and the category write
+ * tools: `kind` is default|custom, `type` is expense|income|ignored (RM calls
+ * income "earning").
+ */
+function shapeCategory(c: rm.RMCategory) {
+  return {
+    id: c.id,
+    nodeId: c.nodeId,
+    label: c.label,
+    kind: c.type,
+    type: c.categoryType === "earning" ? "income" : c.categoryType,
+    includeInSpending: c.includeInSpending,
+    taxDeductible: c.taxDeductible,
+    icon: c.iconKey,
+    color: c.color,
+  };
+}
+
+/**
  * Account node id -> "Institution Name 1234", so transaction rows name the card
  * they hit instead of an opaque base64 id. Cached for the process lifetime: the
  * account list changes only when a new institution is linked, and every caller
@@ -245,10 +264,10 @@ export function buildServer(): McpServer {
     { name: "rocketmoney", version: "1.0.0" },
     {
       instructions:
-        "Access to the user's Rocket Money finances (USD). Read tools: accounts and balances, transactions, spending by category, budgets, net worth, recurring charges (subscriptions, get_subscription), the category catalog (list_categories), and transaction rules (list_rules, get_rule, preview_rule)." +
+        "Access to the user's Rocket Money finances (USD). Read tools: accounts and balances, transactions, spending by category, budgets, net worth, recurring charges (subscriptions, get_subscription), the category catalog (list_categories), and transaction rules (list_rules, get_rule, preview_rule). " +
         (READ_ONLY
           ? "This server runs in read-only mode: the write tools are not registered, so nothing here can change the account."
-          : "Write tools MUTATE the account: set_transaction_note sets/clears a transaction's note; set_transaction_category recategorizes a transaction (optionally every related transaction from the same merchant); update_subscription corrects a recurring charge's name, amount, cadence or dates; delete_subscription removes one from the list; set_transaction_ignore and set_transaction_date change ignore state and dates in batches; create_category/update_category/delete_category manage custom categories; create_rule/update_rule/delete_rule manage transaction rules (run preview_rule first; by default a rule is applied to every existing match too; apply_to_existing=false limits it to future transactions).To recategorize, first call list_categories to see valid labels/ids, then pass a label like \"Groceries\" (or a category id) to set_transaction_category. Marking a subscription cancelled is not possible: Rocket Money's API has no such field for a subscription it detected from transactions.") +
+          : "Write tools MUTATE the account: set_transaction_note sets/clears a transaction's note; set_transaction_category recategorizes a transaction (optionally every related transaction from the same merchant); update_subscription corrects a recurring charge's name, amount, cadence or dates; delete_subscription removes one from the list; set_transaction_ignore and set_transaction_date change ignore state and dates in batches; create_category/update_category/delete_category manage custom categories; create_rule/update_rule/delete_rule manage transaction rules (run preview_rule first; by default a rule is applied to every existing match too; apply_to_existing=false limits it to future transactions). To recategorize, first call list_categories to see valid labels/ids, then pass a label like \"Groceries\" (or a category id) to set_transaction_category. Marking a subscription cancelled is not possible: Rocket Money's API has no such field for a subscription it detected from transactions.") +
         " If a tool reports the session is inactive, the user must re-authenticate at the auth page.",
     },
   );
@@ -536,23 +555,13 @@ export function buildServer(): McpServer {
     {
       title: "List spending categories",
       description:
-        "The user's full Rocket Money category catalog (default + custom), each with its label, node id, and type (expense/income/ignored). Call this to discover valid categories before recategorizing a transaction with set_transaction_category.",
+        "The user's full Rocket Money category catalog, each with its label, ids, kind (default = Rocket Money's own, custom = yours; only custom ones can be edited) and type (expense/income/ignored). Call this to discover valid categories before recategorizing a transaction with set_transaction_category.",
       inputSchema: {},
       annotations: READ,
     },
     tool(async () => {
       const cats = await rm.getTransactionCategories();
-      return {
-        count: cats.length,
-        categories: cats.map((c) => ({
-          id: c.id,
-          nodeId: c.nodeId,
-          label: c.label,
-          type: c.type,
-          categoryType: c.categoryType,
-          includeInSpending: c.includeInSpending,
-        })),
-      };
+      return { count: cats.length, categories: cats.map(shapeCategory) };
     }),
   );
 
@@ -926,15 +935,6 @@ export function buildServer(): McpServer {
     .enum(["expense", "income", "ignored"])
     .describe("expense = counted as spending; income = counted as earnings (only positive amounts); ignored = left out of everything");
   const toCategoryType = (t: "expense" | "income" | "ignored"): rm.CategoryType => (t === "income" ? "earning" : t);
-  const shapeCategory = (c: rm.RMCategory) => ({
-    id: c.id,
-    nodeId: c.nodeId,
-    label: c.label,
-    type: c.categoryType === "earning" ? "income" : c.categoryType,
-    taxDeductible: c.taxDeductible,
-    icon: c.iconKey,
-    color: c.color,
-  });
 
   server.registerTool(
     "create_category",

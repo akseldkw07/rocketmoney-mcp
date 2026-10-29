@@ -60,7 +60,7 @@ export function autoLoginConfigured(): boolean {
   return process.env.ROCKETMONEY_AUTO_LOGIN === "1" && !!EMAIL() && !!PASSWORD();
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ── OTP handoff ────────────────────────────────────────────────────
 // When a run hits the SMS challenge it parks here; the /auth page shows an OTP
