@@ -1,4 +1,5 @@
-import { rmFullText, toRMTransaction } from "./client.js";
+import { rmFullText, toRMTransaction, TRANSACTION_FIELDS } from "./client.js";
+import { addDaysYmd, ymd } from "./windows.js";
 // Transaction rules (Settings -> Transaction Rules, or "Edit Rule" on a
 // transaction). Every operation here sends its own query text rather than a
 // persisted hash, so a hash rotation can't break them. Operation names, input
@@ -65,21 +66,7 @@ const RULES_SEARCH = `query TransactionRulesSearch($matchRules: MatchRulesInput!
       numMatchingTransactions
       transactions {
         edges {
-          node {
-            id
-            date
-            posted_date
-            amount
-            shortName
-            longName(prependCustomName: false)
-            custom_name
-            note
-            category { id label __typename }
-            account { id __typename }
-            ignoredFrom
-            transactionRuleNodeIds
-            __typename
-          }
+          node { ${TRANSACTION_FIELDS} }
           __typename
         }
         __typename
@@ -89,9 +76,21 @@ const RULES_SEARCH = `query TransactionRulesSearch($matchRules: MatchRulesInput!
     __typename
   }
 }`;
+// The payload has no rule field, but it does expose `viewer` (probed
+// 2026-10-29), so the save returns the rule list as of after the save - sparing
+// a separate listRules() round trip to find the new or replaced rule's id.
 const SAVE_RULE = `mutation SaveTransactionRuleMutation($input: SaveTransactionRuleInput!) {
   saveTransactionRule(input: $input) {
     clientMutationId
+    viewer {
+      id
+      transactionRules(first: 100) {
+        edges { node { ${RULE_FIELDS} } __typename }
+        pageInfo { hasNextPage __typename }
+        __typename
+      }
+      __typename
+    }
     __typename
   }
 }`;
@@ -107,6 +106,8 @@ const dateToIso = (ymd) => `${ymd}T00:00:00.000Z`;
 const isoToDate = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
 const present = (v) => v !== null && v !== undefined && v !== "";
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
+/** Stands in for an open start date; earlier than any Rocket Money transaction. */
+export const EARLIEST_DATE = "2000-01-01";
 /**
  * Caller conditions -> MatchRulesV1Input, following the web client's encoding:
  * exact amount = inclusive [x, x]; min+max = inclusive range; min only =
@@ -167,9 +168,12 @@ export function conditionsToInput(c) {
     if (present(c.date_from) && present(c.date_to) && c.date_from > c.date_to) {
         throw new Error("date_from is after date_to.");
     }
+    // An open lower date bound can't be "-Infinity": RM rejects it for dates
+    // ("An error occurred.", 2026-10-29) though it takes "Infinity" as an open
+    // upper bound. A date_to alone gets a concrete floor before any transaction.
     if (present(c.date_from) || present(c.date_to)) {
         out.postedDateBetween = {
-            min: present(c.date_from) ? { value: dateToIso(c.date_from), inclusive: true } : { value: "-Infinity", inclusive: false },
+            min: { value: dateToIso(present(c.date_from) ? c.date_from : EARLIEST_DATE), inclusive: true },
             max: present(c.date_to) ? { value: dateToIso(c.date_to), inclusive: true } : { value: "Infinity", inclusive: false },
         };
     }
@@ -230,7 +234,7 @@ export function parseRule(node) {
     if (dates) {
         const from = isoToDate(dates.min.value);
         const to = isoToDate(dates.max.value);
-        if (from)
+        if (from && from !== EARLIEST_DATE)
             c.date_from = from;
         if (to)
             c.date_to = to;
@@ -301,7 +305,7 @@ export function mergePatch(base, patch) {
 }
 /** Start of tomorrow (UTC), YYYY-MM-DD: a date floor no existing transaction can meet. */
 export function tomorrowYmd(now = new Date()) {
-    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)).toISOString().slice(0, 10);
+    return addDaysYmd(ymd(now), 1);
 }
 /**
  * Raise date_from to at least tomorrow so the rule matches only transactions
@@ -331,7 +335,19 @@ export async function listRules() {
             break;
         cursor = conn.pageInfo.endCursor;
     }
+    liveIdCache = { at: Date.now(), ids: new Set(rules.map((r) => r.id)) };
     return rules;
+}
+// Live rule ids, so transaction rows can tell a rule that still exists from one
+// RM keeps in a transaction's history after it was deleted. Short-lived: rules
+// change only through the tools here (which clear it) or the web app.
+let liveIdCache = null;
+const LIVE_ID_TTL_MS = 60_000;
+export async function liveRuleIds() {
+    if (liveIdCache && Date.now() - liveIdCache.at < LIVE_ID_TTL_MS)
+        return liveIdCache.ids;
+    await listRules();
+    return liveIdCache.ids;
 }
 export async function getRule(ruleId) {
     const rule = (await listRules()).find((r) => r.id === ruleId);
@@ -350,14 +366,26 @@ export async function previewMatches(matchRules, first = 20) {
             .filter((t) => t !== null),
     };
 }
-/** WRITE: create (no ruleId) or replace (ruleId) a rule. RM applies it to every current match. */
+/**
+ * WRITE: create (no ruleId) or replace (ruleId) a rule. RM applies it to every
+ * current match. Returns every rule as of after the save.
+ */
 export async function saveRule(matchRules, operation, ruleId) {
-    await rmFullText("SaveTransactionRuleMutation", SAVE_RULE, {
+    liveIdCache = null;
+    const data = await rmFullText("SaveTransactionRuleMutation", SAVE_RULE, {
         input: { matchRules: { v1: matchRules }, ...operation, ...(ruleId ? { id: ruleId } : {}) },
     });
+    const conn = data.saveTransactionRule?.viewer?.transactionRules;
+    // Past one page (100 rules) the payload is incomplete; page through instead.
+    if (!conn?.edges || conn.pageInfo?.hasNextPage)
+        return listRules();
+    const rules = conn.edges.map((e) => parseRule(e.node));
+    liveIdCache = { at: Date.now(), ids: new Set(rules.map((r) => r.id)) };
+    return rules;
 }
 /** WRITE: delete a rule. keepChanges=false also reverts what it changed on past transactions. */
 export async function destroyRule(ruleId, keepChanges) {
+    liveIdCache = null;
     await rmFullText("DestroyTransactionRule", DESTROY_RULE, {
         input: { ruleId, keepRuleChanges: keepChanges },
     });
@@ -401,15 +429,15 @@ async function previewAndSave(conditions, storedInput, operation, applyToExistin
         throw new Error(`Not saved: these conditions match ${count} existing transaction(s), and Rocket Money applies a rule to ` +
             "every transaction it matches when it is saved. Pass apply_to_existing=true to update them.");
     }
-    await saveRule(input, operation, ruleId);
-    return { count, floor };
+    const after = await saveRule(input, operation, ruleId);
+    return { count, floor, after };
 }
 /** WRITE: create a rule. `updates.category_id` must already be a resolved category node id. */
 export async function createRule(conditions, updates, applyToExisting = true) {
     const operation = updatesToInput(updates);
     const before = new Set((await listRules()).map((r) => r.id));
-    const { count, floor } = await previewAndSave(conditions, {}, operation, applyToExisting);
-    const created = (await listRules()).filter((r) => !before.has(r.id));
+    const { count, floor, after } = await previewAndSave(conditions, {}, operation, applyToExisting);
+    const created = after.filter((r) => !before.has(r.id));
     return {
         rule: created.length === 1 ? created[0] : null,
         existingTransactionsUpdated: applyToExisting ? count : 0,
@@ -436,11 +464,10 @@ export async function updateRule(ruleId, conditions, updates, applyToExisting = 
     const operation = updatesToInput(mergePatch(ruleUpdates(rule), updates));
     // Unchanged conditions are resent exactly as stored, unless the floor has to go on.
     const merged = conditions ? patchConditions(rule.conditions, conditions) : applyToExisting ? null : rule.conditions;
-    const { count, floor } = await previewAndSave(merged, rule.matchRulesInput, operation, applyToExisting, ruleId);
+    const { count, floor, after } = await previewAndSave(merged, rule.matchRulesInput, operation, applyToExisting, ruleId);
     // RM saves an update as a replacement rule with a NEW id (observed
     // 2026-10-29: the old id disappears, the count stays the same).
     const known = new Set(before.map((r) => r.id));
-    const after = await listRules();
     const replaced = after.filter((r) => !known.has(r.id));
     return {
         rule: replaced.length === 1 ? replaced[0] : (after.find((r) => r.id === ruleId) ?? null),

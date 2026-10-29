@@ -52,7 +52,7 @@ const APP_URL = "https://app.rocketmoney.com/";
 export function autoLoginConfigured() {
     return process.env.ROCKETMONEY_AUTO_LOGIN === "1" && !!EMAIL() && !!PASSWORD();
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pendingOtp = null;
 // A code can arrive (via the SMS webhook) a moment BEFORE the run parks, or after.
 // Buffer it briefly so ordering never loses a code: submitOtp resolves a waiter if

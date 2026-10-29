@@ -81,3 +81,21 @@ test("markSessionDead blocks loadSession until re-seeded", () => {
   assert.equal(loadSession()?.get("tb.auth0.sid"), "fresh");
   assert.equal(sessionStatus().status, "live");
 });
+
+test("saveSession skips the disk when nothing changed, and an outside edit is still picked up", async () => {
+  const { statSync, writeFileSync, readFileSync } = await import("node:fs");
+  const file = join(process.env.ROCKETMONEY_STATE_DIR!, "session.json");
+  seedSession("tb.auth0.sid=abc; AWSALB=x");
+  const before = statSync(file).mtimeMs;
+  await new Promise((r) => setTimeout(r, 20));
+  saveSession(loadSession()!); // same cookies, refreshedAt just set by the seed
+  assert.equal(statSync(file).mtimeMs, before);
+
+  saveSession(parseCookieHeader("tb.auth0.sid=new; AWSALB=x")); // a real change is written
+  assert.match(readFileSync(file, "utf8"), /tb\.auth0\.sid=new/);
+
+  await new Promise((r) => setTimeout(r, 20));
+  const row = JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify({ ...row, cookie: "tb.auth0.sid=outside" }));
+  assert.equal(loadSession()?.get("tb.auth0.sid"), "outside");
+});

@@ -19,6 +19,11 @@ export function addDays(d: Date, n: number): Date {
   return new Date(d.getTime() + n * 86_400_000);
 }
 
+/** A YYYY-MM-DD date `n` days later (or earlier, for negative n). */
+export function addDaysYmd(day: string, n: number): string {
+  return ymd(addDays(new Date(`${day}T00:00:00Z`), n));
+}
+
 export interface MonthWindows {
   now: string; // today
   currentMonthStart: string; // first of this month

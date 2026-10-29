@@ -44,8 +44,6 @@ const PERSISTED = {
     RecurringPage: "0026a77fc626a68877701731ac1269584c9b57881283dcaa0923372163668e1c",
     SubscriptionDetailPage: "9556941e4ff9bdc23d43801774a45e8dc01b67b547aab774abcd9815bb5b0f3c",
     RecurringUpcomingPage: "f1dd34f01b69dd0367a8b20a07b8b45977ab6d1ce0d31919b1b4143e5ba205bc",
-    TransactionCategoryPage: "e69fb63dcf0c3ef5b9bd1622d03792b1798a75ea397d901b98b68a4e0d76b025",
-    TransactionsPageTransactionTable: "5bc74a0e8d2c33efe103eeb87d6ec09d9b57fb34795597ef2e3f7d892d76a056",
     // The user's full category catalog (default + custom), with node ids. Captured
     // from app.rocketmoney.com.har (2026-07-05). Read-only; rotating is handled the
     // same as any other persisted read (PersistedQueryNotFound -> re-capture).
@@ -64,11 +62,33 @@ const CAPTURE_PAGE = {
     RecurringPage: "https://app.rocketmoney.com/recurring",
     SubscriptionDetailPage: "https://app.rocketmoney.com/recurring (then click a subscription)",
 };
+/** The headers every RM GraphQL request carries, as the web app sends them. */
+function rmHeaders(jar) {
+    return {
+        accept: "application/graphql+json, application/json",
+        "content-type": "application/json",
+        origin: "https://app.rocketmoney.com",
+        referer: "https://app.rocketmoney.com/",
+        "user-agent": USER_AGENT,
+        "x-truebill-web-client-version": WEB_CLIENT_VERSION,
+        cookie: serializeJar(jar),
+    };
+}
 /** Thrown when the session is no longer authenticated (cookie expired/revoked). */
 export class RMAuthError extends Error {
 }
 /** Thrown when RM no longer recognizes a persisted-query hash. */
 export class PersistedQueryNotFoundError extends Error {
+}
+/** A GraphQL-level failure. Carries whatever data came back, so a batch can keep its partial results. */
+export class RMGraphQLError extends Error {
+    data;
+    errors;
+    constructor(message, data, errors) {
+        super(message);
+        this.data = data;
+        this.errors = errors;
+    }
 }
 // Relay global IDs are base64 of `Type:numericId`. RM already returns opaque
 // base64 `id` fields on nodes, so we only need to BUILD ids when the caller
@@ -94,26 +114,46 @@ export function fromNodeId(nodeId) {
         return null;
     }
 }
-// Serialize every RM API call. The session cookie is a ROLLING token: each
-// response rotates it (Set-Cookie), and we persist the rotated jar. Two calls in
-// flight at once both send the same pre-rotation cookie; RM rotates it for the
-// first and the second's copy is instantly stale -> 401 -> the whole session is
-// marked dead. So a bot firing parallel tool calls (session_status + list_accounts
-// + budgets) would knock itself offline. Chaining calls onto a single promise
-// makes load-jar -> request -> save-jar atomic; concurrent callers just queue.
-let rmChain = Promise.resolve();
+// How many RM calls may be in flight at once. Every call used to be queued
+// behind the previous one, on the premise that each response rotates the session
+// cookie and two calls sharing one value would knock the session offline. On
+// 2026-10-29 the cookie did not rotate on AuthenticationCheck or RefreshAuthToken,
+// a replayed old value still worked, and 5 parallel requests on one cookie all
+// succeeded (144ms vs ~622ms queued). ROCKETMONEY_MAX_CONCURRENCY=1 restores the
+// old one-at-a-time behavior if rotation comes back.
+const MAX_CONCURRENCY = Math.max(1, Number(process.env.ROCKETMONEY_MAX_CONCURRENCY ?? 4) || 1);
+let active = 0;
+const waiting = [];
+async function acquireSlot() {
+    if (active < MAX_CONCURRENCY) {
+        active++;
+        return;
+    }
+    await new Promise((resolve) => waiting.push(resolve));
+}
+// Hands the slot straight to the next waiter (active stays the same), so a new
+// caller can't slip in between and exceed the limit.
+function releaseSlot() {
+    const next = waiting.shift();
+    if (next)
+        next();
+    else
+        active--;
+}
 /**
- * Core executor: POST a full GraphQL body with the live cookie jar, rotate the
- * jar from the response's Set-Cookie headers, and persist it. Throws
- * RMAuthError if the session is dead so callers can report "re-auth needed".
- * Serialized via rmChain so concurrent requests can't race the rolling cookie.
+ * Core executor: POST a full GraphQL body with the live cookie jar, apply any
+ * rotated cookies from the response, and persist them. Throws RMAuthError if
+ * the session is dead so callers can report "re-auth needed". At most
+ * MAX_CONCURRENCY calls run at once; the rest queue.
  */
-function rmExecute(opName, payload) {
-    const run = rmChain.then(() => withRelogin(opName, payload), () => withRelogin(opName, payload));
-    // Keep the chain alive regardless of this call's outcome (swallow here only;
-    // the real result/rejection still propagates to the caller via `run`).
-    rmChain = run.then(() => undefined, () => undefined);
-    return run;
+async function rmExecute(opName, payload) {
+    await acquireSlot();
+    try {
+        return await withRelogin(opName, payload);
+    }
+    finally {
+        releaseSlot();
+    }
 }
 // Mark the session dead and start a re-login right away (no-op unless auto-login
 // is configured; rate-limited inside attemptLogin) instead of waiting for the
@@ -159,15 +199,7 @@ async function rmExecuteUnlocked(opName, payload) {
         throw new RMAuthError("No Rocket Money session. Paste a fresh cookie at /auth.");
     const res = await fetch(GRAPHQL_URL, {
         method: "POST",
-        headers: {
-            accept: "application/graphql+json, application/json",
-            "content-type": "application/json",
-            origin: "https://app.rocketmoney.com",
-            referer: "https://app.rocketmoney.com/",
-            "user-agent": USER_AGENT,
-            "x-truebill-web-client-version": WEB_CLIENT_VERSION,
-            cookie: serializeJar(jar),
-        },
+        headers: rmHeaders(jar),
         body: JSON.stringify(payload),
         redirect: "manual",
     });
@@ -197,19 +229,21 @@ async function rmExecuteUnlocked(opName, payload) {
                 `To fix: load ${page} with devtools recording, export a HAR, and run ` +
                 `\`npm run refresh-hashes -- <file.har>\` (it rewrites PERSISTED in src/rm/client.ts).`);
         }
-        throw new Error(`RM ${opName}: ${json.errors.map((e) => e.message).join("; ")}`);
+        throw new RMGraphQLError(`RM ${opName}: ${json.errors.map((e) => e.message).join("; ")}`, json.data, json.errors);
     }
-    // Healthy authenticated response - commit the rotated cookies.
+    // Healthy authenticated response - commit any rotated cookies onto the LATEST
+    // jar, not this call's copy: a parallel call may have saved a newer one.
     const setCookies = res.headers
         .getSetCookie?.();
+    const latest = loadSession() ?? jar;
     if (setCookies?.length)
-        applySetCookies(jar, setCookies);
-    saveSession(jar);
+        applySetCookies(latest, setCookies);
+    saveSession(latest);
     return json.data;
 }
 /**
  * Check a cookie header the login browser produced, outside the session file and
- * rmChain (nothing is marked dead, no re-login is triggered). The response rotates
+ * concurrency limit (nothing is marked dead, no re-login is triggered). The response rotates
  * the cookie and the old value goes stale, so this returns the ROTATED header to
  * seed with, or null if the cookie isn't authenticated.
  */
@@ -218,15 +252,7 @@ export async function probeSession(cookieHeader) {
         const jar = parseCookieHeader(cookieHeader);
         const res = await fetch(GRAPHQL_URL, {
             method: "POST",
-            headers: {
-                accept: "application/graphql+json, application/json",
-                "content-type": "application/json",
-                origin: "https://app.rocketmoney.com",
-                referer: "https://app.rocketmoney.com/",
-                "user-agent": USER_AGENT,
-                "x-truebill-web-client-version": WEB_CLIENT_VERSION,
-                cookie: serializeJar(jar),
-            },
+            headers: rmHeaders(jar),
             body: JSON.stringify({
                 operationName: "AuthenticationCheck",
                 variables: {},
@@ -285,6 +311,78 @@ async function rmGraphQL(body) {
  */
 export async function rmFullText(operationName, query, variables) {
     return rmExecute(operationName, { operationName, query, variables });
+}
+/**
+ * Why `id` can't be a transaction id, or null if it is one. Checked before
+ * sending: RM answers a bad id with a bare "An error occurred.", which says
+ * nothing about what was wrong.
+ */
+export function notATransactionId(id) {
+    return fromNodeId(id)?.type === "Transaction"
+        ? null
+        : `"${id}" is not a transaction id (use the \`id\` from search_transactions)`;
+}
+/** Split ids into transaction ids and the rest (with the reason each was refused). */
+export function partitionTransactionIds(ids) {
+    const valid = [];
+    const invalid = [];
+    for (const id of ids) {
+        const why = notATransactionId(id);
+        if (why)
+            invalid.push({ id, error: why });
+        else
+            valid.push(id);
+    }
+    return { valid, invalid };
+}
+/** RM's masked per-item error, reworded for a well-formed transaction id it still refused. */
+function explainItemError(message) {
+    if (!message || /^An error occurred\.?$/.test(message.trim())) {
+        return "Rocket Money refused it: no such transaction, or not one of yours (it only says \"An error occurred.\")";
+    }
+    return message;
+}
+/** How many aliased operations go in one request. 50 node reads took 91ms (2026-10-29). */
+export const BATCH_SIZE = 50;
+/**
+ * Run `field` once per input as aliased fields of one document, BATCH_SIZE per
+ * request - RM's per-transaction operations (changeTransactionDate,
+ * setTransactionNote, node reads) accept many aliases in one request (verified
+ * 2026-10-29), so N items cost N/50 round trips instead of N. Results come back
+ * in input order; one item failing doesn't sink the rest of its batch.
+ */
+export async function batchAliased(opName, kind, field, arg, selection, inputs) {
+    const out = [];
+    for (let start = 0; start < inputs.length; start += BATCH_SIZE) {
+        const chunk = inputs.slice(start, start + BATCH_SIZE);
+        const vars = chunk.map((_, i) => `$v${i}: ${arg.type}`).join(", ");
+        const fields = chunk.map((_, i) => `a${i}: ${field}(${arg.name}: $v${i}) {\n    ${selection}\n  }`).join("\n  ");
+        const query = `${kind} ${opName}(${vars}) {\n  ${fields}\n}`;
+        const variables = Object.fromEntries(chunk.map((v, i) => [`v${i}`, v]));
+        let data = {};
+        let errors = [];
+        try {
+            data = (await rmFullText(opName, query, variables)) ?? {};
+        }
+        catch (err) {
+            if (!(err instanceof RMGraphQLError))
+                throw err;
+            data = err.data ?? {};
+            errors = err.errors;
+        }
+        chunk.forEach((_, i) => {
+            const alias = `a${i}`;
+            const own = errors.filter((e) => e.path?.[0] === alias).map((e) => e.message);
+            if (data[alias] != null && !own.length)
+                out.push({ ok: true, data: data[alias] });
+            else {
+                // An error with no path can't be pinned to one alias, so it is reported on every item.
+                const unpinned = errors.filter((e) => !e.path?.length).map((e) => e.message);
+                out.push({ ok: false, error: [...own, ...unpinned].join("; ") || "no result returned" });
+            }
+        });
+    }
+    return out;
 }
 // ── Generic helpers ────────────────────────────────────────────────
 /** Recursively find the first object with the given __typename. */
@@ -589,20 +687,6 @@ export async function getUpcoming(days = 28) {
         variables: { upcomingStartDate: ymd(now), upcomingEndDate: ymd(addDays(now, days)) },
     });
 }
-/** Transactions inside one category for the current month. */
-export async function getCategoryTransactions(categoryNodeId, pageSize = 200) {
-    const w = monthWindows();
-    return rmGraphQL({
-        operationName: "TransactionCategoryPage",
-        variables: {
-            id: categoryNodeId,
-            pageSize,
-            startOfCurrentTimePeriod: w.currentMonthStart,
-            endOfCurrentTimePeriod: w.nextMonthStart,
-            transactionCategoryNodeId: categoryNodeId,
-        },
-    });
-}
 /** One Transaction node (LightTransaction fragment) -> RMTransaction, or null if it lacks the basics. */
 export function toRMTransaction(o) {
     if (typeof o.id !== "string" || typeof o.amount !== "number")
@@ -623,6 +707,20 @@ export function toRMTransaction(o) {
         ruleIds: Array.isArray(o.transactionRuleNodeIds) ? o.transactionRuleNodeIds : [],
     };
 }
+/** Every Transaction field toRMTransaction reads. Shared by search and rule previews. */
+export const TRANSACTION_FIELDS = `__typename
+  id
+  date
+  posted_date
+  amount
+  shortName
+  longName(prependCustomName: false)
+  custom_name
+  note
+  ignoredFrom
+  transactionRuleNodeIds
+  category { id label __typename }
+  account { id __typename }`;
 // The transactions-page query cut down to what RMTransaction reads, plus
 // posted_date (the bank date, which survives a date change) and custom_name.
 // Sent as full text, so it doesn't depend on a persisted hash. `gteDate` and
@@ -632,21 +730,7 @@ const TRANSACTION_SEARCH = `query TransactionSearch($query: String, $order: Stri
     id
     transactions(first: $pageSize, accountIds: $accountIds, transactionCategoryIds: $transactionCategoryIds, query: $query, order: $order, gteDate: $gteDate, ltDate: $ltDate, excludeIgnoredFrom: null, after: $cursor) {
       edges {
-        node {
-          __typename
-          id
-          date
-          posted_date
-          amount
-          shortName
-          longName(prependCustomName: false)
-          custom_name
-          note
-          ignoredFrom
-          transactionRuleNodeIds
-          category { id label __typename }
-          account { id __typename }
-        }
+        node { ${TRANSACTION_FIELDS} }
         __typename
       }
       pageInfo { endCursor hasNextPage __typename }
@@ -656,13 +740,23 @@ const TRANSACTION_SEARCH = `query TransactionSearch($query: String, $order: Stri
   }
 }`;
 /**
+ * Rows per search request. RM accepts up to 2,500 (2,500 rows in 230ms,
+ * 2026-10-29); 1,000 keeps each response well under a few MB with full fields
+ * while cutting a 10,000-row backfill from 50 requests to 10.
+ */
+export const PAGE_SIZE = 1000;
+/** Rows a search returns when the caller doesn't say. */
+export const DEFAULT_SEARCH_LIMIT = 1200;
+/** Rows per searchTransactionsPage call when walking a whole result set by cursor. */
+const SCAN_PAGE_LIMIT = 10_000;
+/**
  * Search transactions, newest first, paging 200 at a time until `limit` rows or
  * the end. Returns nextCursor when more remain, so a caller can walk any window
  * past the limit. Dedupes by node id.
  */
 export async function searchTransactionsPage(opts) {
     const all = [];
-    const limit = opts.limit ?? 1200;
+    const limit = opts.limit ?? DEFAULT_SEARCH_LIMIT;
     let cursor = opts.cursor ?? null;
     let nextCursor = null;
     while (all.length < limit) {
@@ -674,7 +768,8 @@ export async function searchTransactionsPage(opts) {
             gteDate: opts.gteDate ?? null,
             ltDate: opts.ltDate ?? null,
             cursor,
-            pageSize: 200,
+            // Never ask for more than the caller still needs.
+            pageSize: Math.min(PAGE_SIZE, limit - all.length),
         });
         const nodes = [];
         collectByType(data, "Transaction", nodes);
@@ -696,53 +791,49 @@ export async function searchTransactionsPage(opts) {
         nextCursor,
     };
 }
-/**
- * Search transactions matching `query` (optional) on/after `gteDate`
- * (YYYY-MM-DD, optional), up to maxPages pages of 200.
- *
- * `accountIds` takes Account node ids (the same base64 ids getAccounts returns);
- * empty means every account. Without it there is no way to tell which card a
- * charge landed on, since the merchant descriptor alone does not identify the
- * account.
- */
-export async function searchTransactions(query, gteDate, maxPages = 6, accountIds = []) {
-    return (await searchTransactionsPage({ query, gteDate, accountIds, limit: maxPages * 200 })).transactions;
+/** Every transaction matching `opts`, walking the cursor to the end (no row limit). */
+export async function searchAllTransactions(opts) {
+    const all = [];
+    let cursor = null;
+    do {
+        const page = await searchTransactionsPage({ ...opts, cursor, limit: SCAN_PAGE_LIMIT });
+        all.push(...page.transactions);
+        cursor = page.nextCursor;
+    } while (cursor);
+    return all;
 }
-const CHANGE_DATE = `mutation ChangeTransactionDate($input: ChangeTransactionDateInput!) {
-  changeTransactionDate(input: $input) {
-    transaction { id date posted_date __typename }
-    __typename
-  }
-}`;
 /**
  * WRITE: change transactions' dates. RM's mutation takes one transaction, so
- * this is one call per id. `date` "original" resets each to its posted_date,
- * which RM keeps untouched through any number of date changes (verified
- * 2026-10-29). Returns each transaction's dates as RM saved them.
+ * the ids go out as aliased mutations, BATCH_SIZE per request. `date`
+ * "original" resets each to its posted_date, which RM keeps untouched through
+ * any number of date changes (verified 2026-10-29); those are looked up in
+ * batches first. Returns each transaction's dates as RM saved them.
  */
 export async function setTransactionsDate(nodeIds, date) {
-    const out = [];
-    for (const id of nodeIds) {
-        try {
-            let target = date;
-            if (date === "original") {
-                const read = await rmFullText("TransactionPostedDate", "query TransactionPostedDate($id: ID!) {\n  node(id: $id) {\n    id\n    ... on Transaction {\n      posted_date\n    }\n    __typename\n  }\n}", { id });
-                if (!read.node?.posted_date)
-                    throw new Error("no such transaction, or it has no posted date");
-                target = read.node.posted_date;
-            }
-            const data = await rmFullText("ChangeTransactionDate", CHANGE_DATE, { input: { transactionNodeId: id, date: target } });
-            const t = data.changeTransactionDate?.transaction;
-            if (!t?.date)
-                throw new Error("changeTransactionDate returned no transaction");
-            out.push({ id, date: t.date, originalDate: t.posted_date ?? "" });
-        }
-        catch (err) {
-            if (err instanceof RMAuthError)
-                throw err;
-            out.push({ id, date: "", originalDate: "", error: err instanceof Error ? err.message : String(err) });
-        }
+    const lookupErrors = nodeIds.map((id) => notATransactionId(id) ?? undefined);
+    let targets = nodeIds.map((_, i) => (lookupErrors[i] ? null : date));
+    if (date === "original") {
+        const look = nodeIds.map((id, i) => ({ id, i })).filter((x) => !lookupErrors[x.i]);
+        const posted = await batchAliased("TransactionPostedDates", "query", "node", { name: "id", type: "ID!" }, "id\n    ... on Transaction { posted_date }\n    __typename", look.map((x) => x.id));
+        targets = nodeIds.map(() => null);
+        look.forEach((x, k) => {
+            const r = posted[k];
+            if (r.data?.posted_date)
+                targets[x.i] = r.data.posted_date;
+            else
+                lookupErrors[x.i] = r.ok ? "no such transaction, or it has no posted date" : explainItemError(r.error);
+        });
     }
+    const todo = nodeIds.map((id, i) => ({ id, i, target: targets[i] })).filter((t) => t.target !== null);
+    const saved = await batchAliased("ChangeTransactionDates", "mutation", "changeTransactionDate", { name: "input", type: "ChangeTransactionDateInput!" }, "transaction { id date posted_date __typename }\n    __typename", todo.map((t) => ({ transactionNodeId: t.id, date: t.target })));
+    const out = nodeIds.map((id, i) => ({ id, date: "", originalDate: "", error: lookupErrors[i] }));
+    todo.forEach((t, k) => {
+        const r = saved[k];
+        const tx = r.data?.transaction;
+        out[t.i] = tx?.date
+            ? { id: t.id, date: tx.date, originalDate: tx.posted_date ?? "", error: undefined }
+            : { id: t.id, date: "", originalDate: "", error: explainItemError(r.error) };
+    });
     return out;
 }
 /** WRITE: set ignore on many transactions in one round trip. Returns RM's countUpdated. */
@@ -844,7 +935,12 @@ export async function createCategory(label, categoryType, opts = {}) {
 /** A category from the catalog by node id, numeric id or label; throws unless it is custom. */
 async function customCategory(input) {
     const nodeId = await resolveCategoryNodeId(input);
-    const cat = (await getTransactionCategories()).find((c) => c.nodeId === nodeId);
+    let cat = (await categoriesCached()).find((c) => c.nodeId === nodeId);
+    if (!cat) {
+        // A numeric or node id skips the catalog, so it may name a category newer than the cache.
+        _catCache = null;
+        cat = (await categoriesCached()).find((c) => c.nodeId === nodeId);
+    }
     if (!cat)
         throw new Error(`No category "${input}". Use list_categories to see valid options.`);
     if (cat.type !== "custom") {
@@ -884,16 +980,8 @@ export async function deleteCategory(input, reassignTo) {
         target = await resolveCategoryNodeId(reassignTo);
         if (target === cat.nodeId)
             throw new Error("reassign_to is the category being deleted.");
-        const ids = [];
-        let cursor = null;
-        do {
-            const page = await searchTransactionsPage({ categoryIds: [cat.nodeId], cursor, limit: 2000 });
-            ids.push(...page.transactions.map((t) => t.nodeId));
-            cursor = page.nextCursor;
-        } while (cursor);
-        for (let i = 0; i < ids.length; i += 500) {
-            reassigned += await setTransactionsCategory(ids.slice(i, i + 500), target);
-        }
+        const ids = (await searchAllTransactions({ categoryIds: [cat.nodeId] })).map((t) => t.nodeId);
+        reassigned = await setTransactionsCategoryChunked(ids, target);
         if (reassigned < ids.length) {
             throw new Error(`Not deleted: moved only ${reassigned} of ${ids.length} transactions out of "${cat.label}". Nothing was deleted; retry or move the rest by hand.`);
         }
@@ -901,6 +989,25 @@ export async function deleteCategory(input, reassignTo) {
     await rmFullText("DeleteCustomTransactionCategory", "mutation DeleteCustomTransactionCategory($input: DeleteCustomTransactionCategoryInput!) {\n  deleteCustomTransactionCategory(input: $input) {\n    viewer {\n      id\n      __typename\n    }\n    __typename\n  }\n}", { input: { transactionCategoryNodeId: cat.nodeId } });
     _catCache = null;
     return { deleted: cat, reassigned, reassignedTo: target };
+}
+/**
+ * WRITE: set (or clear, with "") notes on many transactions, as aliased
+ * mutations BATCH_SIZE per request. Returns each saved note, or an error per id.
+ */
+export async function setTransactionsNote(items) {
+    const out = items.map((it) => {
+        const why = notATransactionId(it.nodeId);
+        return why ? { id: it.nodeId, note: null, error: why } : { id: it.nodeId, note: null };
+    });
+    const todo = items.map((it, i) => ({ it, i })).filter((x) => !out[x.i].error);
+    const results = await batchAliased("SetTransactionNotes", "mutation", "setTransactionNote", { name: "input", type: "SetTransactionNoteInput!" }, "transaction { id note __typename }\n    __typename", todo.map(({ it }) => ({ transactionNodeId: it.nodeId, note: it.note })));
+    todo.forEach(({ it, i }, k) => {
+        const r = results[k];
+        out[i] = r.ok
+            ? { id: it.nodeId, note: r.data?.transaction?.note ?? null }
+            : { id: it.nodeId, note: null, error: explainItemError(r.error) };
+    });
+    return out;
 }
 /** WRITE: set (or clear, with "") a transaction's free-text note. Returns the saved note. */
 export async function setTransactionNote(nodeId, note) {
@@ -936,11 +1043,21 @@ export async function setTransactionsCategory(nodeIds, catNodeId) {
 export async function setTransactionCategory(nodeId, catNodeId, applyToAll = false) {
     if (!applyToAll)
         return setTransactionsCategory([nodeId], catNodeId);
-    const self = (await searchTransactions(null, null, 1)).find((t) => t.nodeId === nodeId);
-    if (!self?.name)
-        return setTransactionsCategory([nodeId], catNodeId);
-    const related = await searchTransactions(self.name, null, 6);
+    // Read the merchant name off the transaction itself: scanning recent rows for
+    // it missed anything older than the newest 200 and silently updated only one.
+    const self = await rmFullText("TransactionName", "query TransactionName($id: ID!) {\n  node(id: $id) {\n    id\n    ... on Transaction {\n      longName(prependCustomName: false)\n    }\n    __typename\n  }\n}", { id: nodeId });
+    const name = self.node?.longName;
+    if (!name)
+        throw new Error(`No transaction "${nodeId}" (or it has no name to match the rest of the merchant on).`);
+    const related = await searchAllTransactions({ query: name });
     const ids = new Set([nodeId, ...related.map((t) => t.nodeId)]);
-    return setTransactionsCategory([...ids], catNodeId);
+    return setTransactionsCategoryChunked([...ids], catNodeId);
+}
+/** setTransactionsCategory in 500-id chunks, for sweeps that can match thousands. */
+async function setTransactionsCategoryChunked(nodeIds, catNodeId) {
+    let updated = 0;
+    for (let i = 0; i < nodeIds.length; i += 500)
+        updated += await setTransactionsCategory(nodeIds.slice(i, i + 500), catNodeId);
+    return updated;
 }
 export { findByType, collectByType };

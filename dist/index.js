@@ -5,7 +5,7 @@ import { renderAuthPage, submitAuth, triggerLogin, postOtp, smsWebhook } from ".
 import { refreshAuthToken } from "./rm/client.js";
 import { sessionStatus } from "./rm/session.js";
 import { attemptLogin, autoLoginConfigured } from "./rm/login.js";
-import { newTransactions, budgetSnapshot } from "./api.js";
+import { newTransactions, budgetSnapshot, requireToken } from "./api.js";
 const PORT = Number(process.env.PORT ?? 8080);
 const app = express();
 // ── Local-only guard ───────────────────────────────────────────────
@@ -44,11 +44,11 @@ app.post("/auth/sms", smsWebhook); // phone SMS-forwarder posts the RM code here
 // name independent feeds (they set the `feed` label) but carry no cursor state,
 // so there is nothing to advance and no reset route. The bare route is declared
 // first; the slug route follows so a bare hit is not read as an empty slug.
-app.get("/api/transactions", newTransactions);
-app.get("/api/transactions/:slug", newTransactions);
+app.get("/api/transactions", requireToken, newTransactions);
+app.get("/api/transactions/:slug", requireToken, newTransactions);
 // Budgets, recurring merchants, upcoming bills and spending in one read, for
 // the card gate on lockbox deciding whether a new Essentials charge fits.
-app.get("/api/budget", budgetSnapshot);
+app.get("/api/budget", requireToken, budgetSnapshot);
 // ── MCP endpoint ──────────────────────────────────────────────────
 // Stateless streamable HTTP: a fresh server+transport per request, torn down on
 // socket close, so the process holds no per-connection state and Fly can recycle

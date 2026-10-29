@@ -15,6 +15,10 @@ export function monthStart(d, delta = 0) {
 export function addDays(d, n) {
     return new Date(d.getTime() + n * 86_400_000);
 }
+/** A YYYY-MM-DD date `n` days later (or earlier, for negative n). */
+export function addDaysYmd(day, n) {
+    return ymd(addDays(new Date(`${day}T00:00:00Z`), n));
+}
 /** Compute the standard set of month boundaries around a reference day. */
 export function monthWindows(ref = new Date()) {
     const cur = monthStart(ref, 0);

@@ -86,6 +86,21 @@ test("conditionsToInput encodes names, accounts and dates the way the web client
   });
 });
 
+test("a date_to alone gets a concrete early floor, since RM rejects -Infinity for dates", () => {
+  assert.deepEqual(conditionsToInput({ account_ids: ["a"], date_to: "2022-07-31" }).postedDateBetween, {
+    min: { value: "2000-01-01T00:00:00.000Z", inclusive: true },
+    max: { value: "2022-07-31T00:00:00.000Z", inclusive: true },
+  });
+  // ...and reading such a rule back doesn't report the synthetic floor.
+  const r = parseRule({
+    id: "x",
+    matchRules: { v1: { postedDateBetween: conditionsToInput({ name_contains: "x", date_to: "2022-07-31" }).postedDateBetween } },
+    operation: {},
+  });
+  assert.equal(r.conditions.date_from, undefined);
+  assert.equal(r.conditions.date_to, "2022-07-31");
+});
+
 test("conditionsToInput encodes amounts in cents with the client's bounds", () => {
   assert.deepEqual(conditionsToInput({ amount: 1139.79 }).absAmountBetween, {
     min: { value: 113979, inclusive: true },
@@ -175,7 +190,12 @@ function fakeApi(previewCount: number, rules: unknown[] = []) {
       TransactionRulesSearch: {
         viewer: { ruleTransactions: { numMatchingTransactions: previewCount, transactions: { edges: [] } } },
       },
-      SaveTransactionRuleMutation: { saveTransactionRule: { clientMutationId: null } },
+      SaveTransactionRuleMutation: {
+        saveTransactionRule: {
+          clientMutationId: null,
+          viewer: { transactionRules: { edges: rules.map((node) => ({ node })), pageInfo: { hasNextPage: false } } },
+        },
+      },
     };
     return new Response(JSON.stringify({ data: data[body.operationName] }), {
       status: 200,
@@ -216,6 +236,8 @@ test("createRule with apply_to_existing=true reports the preview count and adds 
   assert.equal(v1.postedDateBetween, undefined);
   assert.equal(r.existingTransactionsUpdated, 7);
   assert.equal(r.dateFloorAdded, null);
+  // One list before the save; the save itself returns the list after.
+  assert.equal(sent.filter((b) => b.operationName === "TransactionRulesPage").length, 1);
 });
 
 test("updateRule refuses a rule that already matches transactions unless apply_to_existing", async () => {
