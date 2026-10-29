@@ -64,6 +64,23 @@ function feedSlug(req) {
 function logHit(req, note) {
     console.log(`[api] ${req.method} ${req.path} ${note}`);
 }
+/** Express middleware: 401 unless the request carries ROCKETMONEY_API_TOKEN. */
+export function requireToken(req, res, next) {
+    if (authorized(req))
+        return next();
+    logHit(req, "-> 401");
+    res.status(401).json({ ok: false, error: "unauthorized" });
+}
+/** A dead session is a 503 with a re-auth hint, so a poller can alert instead of reading "no data". */
+function sendSessionInactive(req, res, detail) {
+    logHit(req, `-> 503 (${String(detail.session ?? detail.detail ?? "session inactive")})`);
+    res.status(503).json({
+        ok: false,
+        error: "rocketmoney session not active",
+        ...detail,
+        hint: "Re-auth at this server's /auth page",
+    });
+}
 /**
  * GET /api/transactions          (default feed)
  * GET /api/transactions/:slug    (named feed, e.g. /groceries)
@@ -74,11 +91,6 @@ function logHit(req, note) {
  * server-side state - they only change the `feed` label on the response.
  */
 export async function newTransactions(req, res) {
-    if (!authorized(req)) {
-        logHit(req, "-> 401");
-        res.status(401).json({ ok: false, error: "unauthorized" });
-        return;
-    }
     const slug = feedSlug(req);
     if (slug === false) {
         logHit(req, "-> 400 (bad slug)");
@@ -92,16 +104,8 @@ export async function newTransactions(req, res) {
     // Surface a dead session as 503 + a hint rather than an empty 200, so a poller
     // can alert instead of quietly believing there was no spending.
     const session = sessionStatus();
-    if (session.status !== "live") {
-        logHit(req, `-> 503 (session ${session.status})`);
-        res.status(503).json({
-            ok: false,
-            error: "rocketmoney session not active",
-            session: session.status,
-            hint: "Re-auth at this server's /auth page",
-        });
-        return;
-    }
+    if (session.status !== "live")
+        return sendSessionInactive(req, res, { session: session.status });
     const lastScanned = new Date();
     const since = lookbackSince(lastScanned);
     try {
@@ -129,16 +133,8 @@ export async function newTransactions(req, res) {
         });
     }
     catch (err) {
-        if (err instanceof RMAuthError) {
-            logHit(req, "-> 503 (RMAuthError)");
-            res.status(503).json({
-                ok: false,
-                error: "rocketmoney session rejected",
-                detail: err.message,
-                hint: "Re-auth at this server's /auth page",
-            });
-            return;
-        }
+        if (err instanceof RMAuthError)
+            return sendSessionInactive(req, res, { detail: err.message });
         console.error("[api] transactions error:", err);
         res.status(502).json({ ok: false, error: "upstream error", detail: String(err) });
     }
@@ -154,12 +150,6 @@ export async function newTransactions(req, res) {
  * guard as the transactions feed, for the same unattended callers.
  */
 export async function budgetSnapshot(req, res) {
-    if (!authorized(req)) {
-        logHit(req, "-> 401");
-        res.status(401).json({ ok: false, error: "unauthorized" });
-        return;
-    }
-    // Five independent reads. Rocket Money rotates its persisted-query hashes
     // one at a time, so a single stale hash must cost one section, not the
     // whole snapshot; whatever failed is named under `errors` instead.
     const reads = {
@@ -185,11 +175,8 @@ export async function budgetSnapshot(req, res) {
             errors[key] = err.message;
         }
     }));
-    if (authFailed) {
-        logHit(req, "-> 503 (session inactive)");
-        res.status(503).json({ ok: false, error: "rocket money session inactive", session: sessionStatus() });
-        return;
-    }
+    if (authFailed)
+        return sendSessionInactive(req, res, { session: sessionStatus().status });
     if (Object.keys(errors).length === Object.keys(reads).length) {
         logHit(req, `-> 500 (${Object.values(errors).join("; ")})`);
         res.status(500).json({ ok: false, error: "every read failed", errors });

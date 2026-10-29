@@ -130,7 +130,7 @@ probes on 2026-10-29.
       (`custom_name: null`, `note: null`, `applied_rule_ids: []`).
       *Fix:* compact JSON, and drop null/empty fields from transaction rows. Document
       that a missing field means none.
-- [ ] **A6. Account labels come from the heaviest query.** `accountLabels()` pulls
+- [x] **A6. Account labels come from the heaviest query.** `accountLabels()` pulls
       `AccountDetailAccountListPage` (six overlapping account buckets with balances)
       just to map id to name. The cache never expires, so a newly linked account shows a
       raw id until restart.
@@ -157,29 +157,29 @@ probes on 2026-10-29.
 
 ### C. Duplicated code to consolidate
 
-- [ ] **C1. One transaction field list.** The node selection is written out in both
+- [x] **C1. One transaction field list.** The node selection is written out in both
       `TRANSACTION_SEARCH` (client.ts) and `RULES_SEARCH` (rules.ts). Export a single
       `TRANSACTION_FIELDS` string and use it in both, so a new field like `posted_date`
       can't reach one and miss the other.
-- [ ] **C2. One request builder.** `rmExecuteUnlocked`, `probeSession` and
+- [x] **C2. One request builder.** `rmExecuteUnlocked`, `probeSession` and
       `scripts/refresh-hashes.ts` each build the same headers. Extract
       `rmHeaders(cookieHeader)` and `postGraphQL(body, jar)`.
-- [ ] **C3. Date helpers.** `shiftYmd` (mcp.ts), `tomorrowYmd` (rules.ts) and the
+- [x] **C3. Date helpers.** `shiftYmd` (mcp.ts), `tomorrowYmd` (rules.ts) and the
       inline month start in `category_transactions` re-implement `windows.ts`
       (`addDays`, `ymd`, `monthStart`). Use `windows.ts`, with one `addDaysYmd` added.
-- [ ] **C4. Account label formatting** exists twice: `accountLabels()` in mcp.ts
+- [x] **C4. Account label formatting** exists twice: `accountLabels()` in mcp.ts
       ("institution name mask") and `accountLabel()` in format.ts ("short_name name
       number"). One formatter, so rows read the same in every tool.
-- [ ] **C5. Batch write results.** `set_transactions_category`,
+- [x] **C5. Batch write results.** `set_transactions_category`,
       `set_transaction_ignore` and `set_transaction_date` each assemble
       `{requested, updatedCount, ok}` by hand. Add one `batchResult()` helper.
-- [ ] **C6. `/api` handlers repeat the token check and the 401/503 handling.** Use
+- [x] **C6. `/api` handlers repeat the token check and the 401/503 handling.** Use
       `requireToken` middleware and one `sendRmError(res, err)`. `/api/transactions`
       also maps rows by hand; reuse the MCP `shapeTxn` (adds `original_date`, `ignore`,
-      `account`).
-- [ ] **C7. Money rounding.** `Math.round(x * 100) / 100` appears in format.ts
+      `account`). *Done for the token check and session errors; the feed keeps its row fields, since the card gate reads them.*
+- [x] **C7. Money rounding.** `Math.round(x * 100) / 100` appears in format.ts
       (net worth, upcoming) and mcp.ts (holdings). Use one `roundUsd()` beside `usd()`.
-- [ ] **C8. Category lookups.** `customCategory()` resolves through the cached catalog,
+- [x] **C8. Category lookups.** `customCategory()` resolves through the cached catalog,
       then fetches the whole catalog again uncached. Read from the cache once, and
       invalidate it after writes as now.
 

@@ -1,5 +1,6 @@
 import {
   applySetCookies,
+  type CookieJar,
   loadSession,
   markSessionDead,
   parseCookieHeader,
@@ -73,6 +74,19 @@ const CAPTURE_PAGE: Partial<Record<keyof typeof PERSISTED, string>> = {
   RecurringPage: "https://app.rocketmoney.com/recurring",
   SubscriptionDetailPage: "https://app.rocketmoney.com/recurring (then click a subscription)",
 };
+
+/** The headers every RM GraphQL request carries, as the web app sends them. */
+function rmHeaders(jar: CookieJar): Record<string, string> {
+  return {
+    accept: "application/graphql+json, application/json",
+    "content-type": "application/json",
+    origin: "https://app.rocketmoney.com",
+    referer: "https://app.rocketmoney.com/",
+    "user-agent": USER_AGENT,
+    "x-truebill-web-client-version": WEB_CLIENT_VERSION,
+    cookie: serializeJar(jar),
+  };
+}
 
 /** Thrown when the session is no longer authenticated (cookie expired/revoked). */
 export class RMAuthError extends Error {}
@@ -196,15 +210,7 @@ async function rmExecuteUnlocked<T = unknown>(opName: string, payload: Record<st
 
   const res = await fetch(GRAPHQL_URL, {
     method: "POST",
-    headers: {
-      accept: "application/graphql+json, application/json",
-      "content-type": "application/json",
-      origin: "https://app.rocketmoney.com",
-      referer: "https://app.rocketmoney.com/",
-      "user-agent": USER_AGENT,
-      "x-truebill-web-client-version": WEB_CLIENT_VERSION,
-      cookie: serializeJar(jar),
-    },
+    headers: rmHeaders(jar),
     body: JSON.stringify(payload),
     redirect: "manual",
   });
@@ -268,15 +274,7 @@ export async function probeSession(cookieHeader: string): Promise<string | null>
     const jar = parseCookieHeader(cookieHeader);
     const res = await fetch(GRAPHQL_URL, {
       method: "POST",
-      headers: {
-        accept: "application/graphql+json, application/json",
-        "content-type": "application/json",
-        origin: "https://app.rocketmoney.com",
-        referer: "https://app.rocketmoney.com/",
-        "user-agent": USER_AGENT,
-        "x-truebill-web-client-version": WEB_CLIENT_VERSION,
-        cookie: serializeJar(jar),
-      },
+      headers: rmHeaders(jar),
       body: JSON.stringify({
         operationName: "AuthenticationCheck",
         variables: {},
@@ -794,6 +792,21 @@ export function toRMTransaction(o: Record<string, unknown>): RMTransaction | nul
   };
 }
 
+/** Every Transaction field toRMTransaction reads. Shared by search and rule previews. */
+export const TRANSACTION_FIELDS = `__typename
+  id
+  date
+  posted_date
+  amount
+  shortName
+  longName(prependCustomName: false)
+  custom_name
+  note
+  ignoredFrom
+  transactionRuleNodeIds
+  category { id label __typename }
+  account { id __typename }`;
+
 // The transactions-page query cut down to what RMTransaction reads, plus
 // posted_date (the bank date, which survives a date change) and custom_name.
 // Sent as full text, so it doesn't depend on a persisted hash. `gteDate` and
@@ -803,21 +816,7 @@ const TRANSACTION_SEARCH = `query TransactionSearch($query: String, $order: Stri
     id
     transactions(first: $pageSize, accountIds: $accountIds, transactionCategoryIds: $transactionCategoryIds, query: $query, order: $order, gteDate: $gteDate, ltDate: $ltDate, excludeIgnoredFrom: null, after: $cursor) {
       edges {
-        node {
-          __typename
-          id
-          date
-          posted_date
-          amount
-          shortName
-          longName(prependCustomName: false)
-          custom_name
-          note
-          ignoredFrom
-          transactionRuleNodeIds
-          category { id label __typename }
-          account { id __typename }
-        }
+        node { ${TRANSACTION_FIELDS} }
         __typename
       }
       pageInfo { endCursor hasNextPage __typename }
@@ -1105,7 +1104,12 @@ export async function createCategory(
 /** A category from the catalog by node id, numeric id or label; throws unless it is custom. */
 async function customCategory(input: string): Promise<RMCategory> {
   const nodeId = await resolveCategoryNodeId(input);
-  const cat = (await getTransactionCategories()).find((c) => c.nodeId === nodeId);
+  let cat = (await categoriesCached()).find((c) => c.nodeId === nodeId);
+  if (!cat) {
+    // A numeric or node id skips the catalog, so it may name a category newer than the cache.
+    _catCache = null;
+    cat = (await categoriesCached()).find((c) => c.nodeId === nodeId);
+  }
   if (!cat) throw new Error(`No category "${input}". Use list_categories to see valid options.`);
   if (cat.type !== "custom") {
     throw new Error(`"${cat.label}" is a default Rocket Money category; only custom categories can be changed or deleted.`);

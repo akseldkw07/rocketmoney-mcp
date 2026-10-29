@@ -4,6 +4,8 @@ import { RMAuthError } from "./rm/client.js";
 import * as rm from "./rm/client.js";
 import * as fmt from "./rm/format.js";
 import * as rules from "./rm/rules.js";
+import { shapeTxns } from "./rm/rows.js";
+import { addDaysYmd, monthWindows } from "./rm/windows.js";
 import { sessionStatus } from "./rm/session.js";
 
 const AUTH_HINT =
@@ -32,6 +34,20 @@ function tool<T>(fn: (args: T) => Promise<unknown>) {
 const READ = { readOnlyHint: true, openWorldHint: true } as const;
 
 /**
+ * The result every batch write returns: how many of the requested items
+ * Rocket Money reports updated, plus per-item results when it gives them.
+ * `ok` means all of them - compare counts rather than trusting a bare success.
+ */
+function batchOutcome(requested: number, updated: number, extra: Record<string, unknown> = {}) {
+  return { requested, updatedCount: updated, ...extra, ok: updated === requested };
+}
+
+/** batchOutcome for per-item results, where an item with an `error` failed. */
+function perItemOutcome<R extends { error?: string }>(results: R[], extra: Record<string, unknown> = {}) {
+  return batchOutcome(results.length, results.filter((r) => !r.error).length, { ...extra, results });
+}
+
+/**
  * One category, the same shape from list_categories and the category write
  * tools: `kind` is default|custom, `type` is expense|income|ignored (RM calls
  * income "earning").
@@ -48,47 +64,6 @@ function shapeCategory(c: rm.RMCategory) {
     icon: c.iconKey,
     color: c.color,
   };
-}
-
-/**
- * Account node id -> "Institution Name 1234", so transaction rows name the card
- * they hit instead of an opaque base64 id. Cached for the process lifetime: the
- * account list changes only when a new institution is linked, and every caller
- * falls back to the raw id on a miss.
- */
-let accountLabelCache: Map<string, string> | null = null;
-async function accountLabels(): Promise<Map<string, string>> {
-  if (accountLabelCache) return accountLabelCache;
-  const shaped = fmt.shapeAccounts(await rm.getAccounts()) as {
-    institutions?: { institution?: unknown; accounts?: { id?: unknown; name?: unknown; mask?: unknown }[] }[];
-  };
-  const map = new Map<string, string>();
-  for (const inst of shaped.institutions ?? []) {
-    for (const a of inst.accounts ?? []) {
-      if (typeof a.id !== "string") continue;
-      const parts = [inst.institution, a.name, a.mask].filter(Boolean).map(String);
-      map.set(a.id, parts.join(" "));
-    }
-  }
-  accountLabelCache = map;
-  return map;
-}
-
-/**
- * accountLabels for decorating rows, degrading to raw account ids when the
- * account list can't be read (e.g. its persisted hash rotated) instead of
- * failing a call whose real data loaded fine.
- */
-async function accountLabelsOrIds(): Promise<{ labels: Map<string, string>; warning?: string }> {
-  try {
-    return { labels: await accountLabels() };
-  } catch (err) {
-    if (err instanceof RMAuthError) throw err;
-    return {
-      labels: new Map(),
-      warning: `Account names unavailable, so rows show account ids (${err instanceof Error ? err.message : err}).`,
-    };
-  }
 }
 
 // ── Transaction rules: shared input schemas and output shapes ───────
@@ -159,95 +134,12 @@ function shapeRule(r: rules.RMRule) {
   };
 }
 
-interface RowContext {
-  labels: Map<string, string>;
-  /** null when no row has rule ids, so the rule list wasn't fetched. */
-  liveRules: Set<string> | null;
-}
-
-/**
- * One transaction row, the same shape from every tool that lists transactions.
- * Empty fields are left out rather than sent as null/[]; on a large pull they
- * are most of the payload. (compactTable is the bulk form.)
- */
-function shapeTxn(t: rm.RMTransaction, ctx: RowContext) {
-  const row: Record<string, unknown> = {
-    id: t.nodeId,
-    date: t.date,
-    amount: fmt.usd(t.amountCents),
-    name: t.name,
-    category: t.categoryLabel,
-    account: t.accountId ? (ctx.labels.get(t.accountId) ?? t.accountId) : null,
-  };
-  if (t.originalDate && t.originalDate !== t.date) row.original_date = t.originalDate;
-  if (t.ignoredFrom) row.ignore = t.ignoredFrom;
-  if (t.customName) row.custom_name = t.customName;
-  if (t.note) row.note = t.note;
-  if (t.ruleIds.length) {
-    const live = t.ruleIds.filter((id) => ctx.liveRules?.has(id));
-    const deleted = t.ruleIds.filter((id) => !ctx.liveRules?.has(id));
-    if (live.length) row.applied_rule_ids = live;
-    if (deleted.length) row.deleted_rule_ids = deleted;
-  }
-  return row;
-}
-
-const COMPACT_COLUMNS = ["id", "date", "amount", "name", "category", "account", "original_date", "ignore"] as const;
-
-/**
- * Compact form for bulk reads: a table instead of an object per row. Column
- * names appear once, and category and account - the longest repeated strings -
- * are indexes into `categories` / `accounts`. Trailing empty cells are dropped.
- * About half the size of compact objects on a 1,200-row pull.
- */
-function compactTable(txns: rm.RMTransaction[], labels: Map<string, string>) {
-  const categories: string[] = [];
-  const accounts: string[] = [];
-  const index = (list: string[], v: string | null) => {
-    if (v === null) return null;
-    const i = list.indexOf(v);
-    return i >= 0 ? i : list.push(v) - 1;
-  };
-  const rows = txns.map((t) => {
-    const row: unknown[] = [
-      t.nodeId,
-      t.date,
-      fmt.usd(t.amountCents),
-      t.name,
-      index(categories, t.categoryLabel),
-      index(accounts, t.accountId ? (labels.get(t.accountId) ?? t.accountId) : null),
-      t.originalDate && t.originalDate !== t.date ? t.originalDate : null,
-      t.ignoredFrom ?? null,
-    ];
-    while (row.length && row[row.length - 1] === null) row.pop();
-    return row;
-  });
-  return { columns: COMPACT_COLUMNS, categories, accounts, rows };
-}
-
-async function shapeTxns(txns: rm.RMTransaction[], compact = false) {
-  const { labels, warning } = txns.length ? await accountLabelsOrIds() : { labels: new Map<string, string>() };
-  if (compact) return { ...(warning ? { warning } : {}), ...compactTable(txns, labels) };
-  const liveRules = txns.some((t) => t.ruleIds.length) ? await rules.liveRuleIds() : null;
-  return {
-    ...(warning ? { warning } : {}),
-    transactions: txns.map((t) => shapeTxn(t, { labels, liveRules })),
-  };
-}
-
 const COMPACT = z
   .boolean()
   .optional()
   .describe(
     "Bulk-read form (default false): instead of `transactions`, returns a table {columns, categories, accounts, rows}. Each row is an array in `columns` order [id, date, amount, name, category, account, original_date, ignore]; category and account are indexes into `categories` / `accounts`; trailing empty cells are omitted (no original_date = same as date, no ignore = counted). Leaves out notes, renames and rule ids.",
   );
-
-/** YYYY-MM-DD plus n days. */
-function shiftYmd(ymd: string, n: number): string {
-  const d = new Date(`${ymd}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
 
 const ROW_FIELDS =
   "Each row has id, date (the current, possibly hand-changed date), amount, name, category and account. Fields are left out when empty: original_date (the date the bank posted it) appears only when it differs from date; ignore (budget = left out of budgets, everything = left out of all spending) only when the row is ignored; custom_name (a rename, by hand or by rule), note, applied_rule_ids (live rules that have applied to it; when several set the same field, the last id has been the effective one) and deleted_rule_ids (rules that applied before being deleted - Rocket Money keeps them in the row's history). Pass compact=true for bulk reads: a table about a third the size.";
@@ -340,7 +232,7 @@ export function buildServer(): McpServer {
         type: h.type,
       }));
       const total = holdings.reduce((t, h) => t + (h.value ?? 0), 0);
-      return { count: holdings.length, totalValue: Math.round(total * 100) / 100, holdings };
+      return { count: holdings.length, totalValue: fmt.roundUsd(total), holdings };
     }),
   );
 
@@ -506,7 +398,7 @@ export function buildServer(): McpServer {
           gteDate: args.since ?? null,
           // ltDate is exclusive. By original_date there is no server upper bound:
           // a transaction posted in the window may have been moved later.
-          ltDate: !byOriginal && args.until ? shiftYmd(args.until, 1) : null,
+          ltDate: !byOriginal && args.until ? addDaysYmd(args.until, 1) : null,
           accountIds: args.account_ids ?? [],
           categoryIds,
           cursor: args.cursor ?? null,
@@ -538,12 +430,10 @@ export function buildServer(): McpServer {
       annotations: READ,
     },
     tool(async ({ category_id, since, until, compact }: { category_id: string; since?: string; until?: string; compact?: boolean }) => {
-      const now = new Date();
-      const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
       const page = await rm.searchTransactionsPage({
         categoryIds: [await rm.resolveCategoryNodeId(category_id)],
-        gteDate: since ?? monthStart,
-        ltDate: until ? shiftYmd(until, 1) : null,
+        gteDate: since ?? monthWindows().currentMonthStart,
+        ltDate: until ? addDaysYmd(until, 1) : null,
         limit: 2000,
       });
       return { count: page.transactions.length, ...(await shapeTxns(page.transactions, compact)) };
@@ -670,9 +560,7 @@ export function buildServer(): McpServer {
         ];
         if (a.transaction_ids?.length && a.note === undefined) throw new Error("transaction_ids needs a `note`.");
         if (!items.length) throw new Error("Pass transaction_ids + note, or notes.");
-        const results = await rm.setTransactionsNote(items);
-        const failed = results.filter((r) => r.error).length;
-        return { requested: items.length, updatedCount: items.length - failed, results, ok: failed === 0 };
+        return perItemOutcome(await rm.setTransactionsNote(items));
       },
     ),
   );
@@ -732,13 +620,7 @@ export function buildServer(): McpServer {
     tool(async ({ transaction_ids, category }: { transaction_ids: string[]; category: string }) => {
       const catNodeId = await rm.resolveCategoryNodeId(category);
       const updated = await rm.setTransactionsCategory(transaction_ids, catNodeId);
-      return {
-        requested: transaction_ids.length,
-        updatedCount: updated,
-        category,
-        categoryNodeId: catNodeId,
-        ok: updated === transaction_ids.length,
-      };
+      return batchOutcome(transaction_ids.length, updated, { category, categoryNodeId: catNodeId });
     }),
   );
 
@@ -900,7 +782,7 @@ export function buildServer(): McpServer {
     },
     tool(async ({ transaction_ids, ignore }: { transaction_ids: string[]; ignore: "none" | "budget" | "everything" }) => {
       const updated = await rm.setTransactionsIgnored(transaction_ids, ignore === "none" ? null : ignore);
-      return { requested: transaction_ids.length, updatedCount: updated, ignore, ok: updated === transaction_ids.length };
+      return batchOutcome(transaction_ids.length, updated, { ignore });
     }),
   );
 
@@ -921,13 +803,9 @@ export function buildServer(): McpServer {
     },
     tool(async ({ transaction_ids, date }: { transaction_ids: string[]; date: string }) => {
       const results = await rm.setTransactionsDate(transaction_ids, date);
-      const failed = results.filter((r) => r.error).length;
-      return {
-        requested: transaction_ids.length,
-        updatedCount: results.length - failed,
-        results: results.map((r) => ({ id: r.id, date: r.date || null, original_date: r.originalDate || null, ...(r.error ? { error: r.error } : {}) })),
-        ok: failed === 0,
-      };
+      return perItemOutcome(
+        results.map((r) => ({ id: r.id, date: r.date || null, original_date: r.originalDate || null, ...(r.error ? { error: r.error } : {}) })),
+      );
     }),
   );
 

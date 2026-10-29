@@ -1,4 +1,5 @@
-import { rmFullText, toRMTransaction } from "./client.js";
+import { rmFullText, toRMTransaction, TRANSACTION_FIELDS } from "./client.js";
+import { addDaysYmd, ymd } from "./windows.js";
 // Transaction rules (Settings -> Transaction Rules, or "Edit Rule" on a
 // transaction). Every operation here sends its own query text rather than a
 // persisted hash, so a hash rotation can't break them. Operation names, input
@@ -65,21 +66,7 @@ const RULES_SEARCH = `query TransactionRulesSearch($matchRules: MatchRulesInput!
       numMatchingTransactions
       transactions {
         edges {
-          node {
-            id
-            date
-            posted_date
-            amount
-            shortName
-            longName(prependCustomName: false)
-            custom_name
-            note
-            category { id label __typename }
-            account { id __typename }
-            ignoredFrom
-            transactionRuleNodeIds
-            __typename
-          }
+          node { ${TRANSACTION_FIELDS} }
           __typename
         }
         __typename
@@ -306,7 +293,7 @@ export function mergePatch(base, patch) {
 }
 /** Start of tomorrow (UTC), YYYY-MM-DD: a date floor no existing transaction can meet. */
 export function tomorrowYmd(now = new Date()) {
-    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)).toISOString().slice(0, 10);
+    return addDaysYmd(ymd(now), 1);
 }
 /**
  * Raise date_from to at least tomorrow so the rule matches only transactions

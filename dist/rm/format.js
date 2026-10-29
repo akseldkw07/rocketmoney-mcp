@@ -11,6 +11,10 @@ export function usd(cents) {
         return null;
     return Math.round(cents) / 100;
 }
+/** Round a sum of dollar amounts back to cents (float addition drifts). */
+export function roundUsd(dollars) {
+    return Math.round(dollars * 100) / 100;
+}
 // Every RM money field is integer cents, including the ones whose names lack the
 // usual `Cents` suffix (displayedBalance, currentBalance, available_balance,
 // credit_limit, and netWorth/asset/debt on the history rows). Passing one through
@@ -170,7 +174,7 @@ export function shapeNetWorth(data) {
         return { date: p.date, netWorth: usd(p.netWorth), asset: usd(p.asset), debt: usd(p.debt) };
     });
     return {
-        netWorth: Math.round((assets - debts) * 100) / 100,
+        netWorth: roundUsd(assets - debts),
         totals: {
             assets, debts, cash, savings, investments, other,
             creditCardDebt, longTermDebt, otherDebt,
@@ -264,8 +268,8 @@ export function cadence(frequency) {
         return "irregular";
     return CADENCE[frequency] ?? `${frequency} times a year`;
 }
-/** "Bluevine 312.dev LLC Checking 0322" for the account a charge lands on. */
-function accountLabel(account) {
+/** "Bluevine 312.dev LLC Checking 0322": the one label for an account, everywhere. */
+export function accountLabel(account) {
     const parts = [asObj(account.institution).short_name, account.name, account.number]
         .filter(Boolean)
         .map(String);
@@ -304,7 +308,7 @@ function shapeSubscriptionNode(n) {
         amount,
         amountSource,
         yearlyCost: typeof n.frequency === "number" && amount !== null
-            ? Math.round(amount * n.frequency * 100) / 100
+            ? roundUsd(amount * n.frequency)
             : null,
         category: asObj(n.transactionCategory).label,
         serviceType: n.service_type,
@@ -403,5 +407,5 @@ export function shapeUpcoming(data) {
         };
     });
     const total = items.reduce((t, i) => t + (i.amount ?? 0), 0);
-    return { count: items.length, totalUpcoming: Math.round(total * 100) / 100, items };
+    return { count: items.length, totalUpcoming: roundUsd(total), items };
 }
