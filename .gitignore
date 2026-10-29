@@ -7,3 +7,5 @@ node_modules/
 .DS_Store
 .env
 .claude/
+# Personal categorization specifics (names, ids, rent) - see CATEGORIZATION.md
+*.local.md

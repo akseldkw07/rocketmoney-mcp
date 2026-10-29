@@ -1,6 +1,7 @@
 import { applySetCookies, loadSession, markSessionDead, parseCookieHeader, saveSession, serializeJar, } from "./session.js";
 import { monthWindows, ymd, addDays } from "./windows.js";
 import { attemptLogin, autoLoginConfigured } from "./login.js"; // circular; runtime-only use
+import { QUERY_TEXT } from "./query-text.js";
 const GRAPHQL_URL = "https://client-api.rocketmoney.com/graphql";
 // Captured from the web app. The exact value doesn't gate persisted-query
 // resolution (hashes survive client-version bumps) but RM expects the header.
@@ -17,18 +18,33 @@ const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 // (RM no longer answers that operation at all), and AccountDetailPage.
 // SubscriptionDetailPage added 2026-09-13 from recurring.har; RecurringPage's
 // hash was unchanged in that same capture.
+//
+// A hash can also be recomputed without a login, because every query document
+// ships in the public bundle (pages/_app-*.js): the web client sends
+// sha256(print(formatDocument(doc))), formatDocument being urql's pass that adds
+// __typename. Re-derived that way 2026-10-27 for AccountDetailAccountListPage,
+// AccountDetailPage, SpendingPage, Budgets, RecurringPage and
+// TransactionCategoryPage; the same computation reproduced every hash left
+// unchanged, which is what showed it matches the client. (Rerun against the
+// 2026-10-29 bundle, it reproduced only two of six changed hashes, so treat a
+// computed hash as a guess until a request with it succeeds.)
+//
+// To update from a capture: `npm run refresh-hashes -- <file.har>` rewrites the
+// entries below from every operationName -> sha256Hash pair in the HAR. A stale
+// hash no longer breaks a tool in the meantime: rmGraphQL falls back to the
+// query text in QUERY_TEXT (`npm run refresh-hashes -- --bundle` regenerates it).
 const PERSISTED = {
     AuthenticationCheck: "5fe578b1917c4601cb63948f580ad3bdadded0fefa985fdd2fe2d1b913cce2d0",
     RefreshAuthToken: "a86bd0f5e3fbc3673d1215b894362c5cd28ce060a7bb326cc9fd37b06bdd9fbb",
-    AccountDetailAccountListPage: "72975ab40c3705a74516ca9ebf4ae78876c103e409c795f2aaea8f2d283fb78a",
-    AccountDetailPage: "70347255abce45e4b1ea63edbb6dc8fc7f170b040854443bb32eb1ab6029fd2d",
+    AccountDetailAccountListPage: "a9a8e1b8f1514189f262e2952d57430bd56882ce1d903817e7b4e863b3bd7b9f",
+    AccountDetailPage: "353069c04c1778a074ae9aee8398d4286a0f26d75cb1c933d17fb1ce18d2dfdf",
     NetWorthQuery: "5d319beb9e4b601c8381198731cbdaeeba106e442c44c049e4333142db07ed11",
-    SpendingPage: "26e04b9b4bcf2033891037bda8b67e43afc96684f0d734883fa1af75776f14fa",
-    Budgets: "f55267f5c1dacf4bfa2c92893506f771f49e3ddc04d34fa14d21d0ffeea4dfbe",
-    RecurringPage: "1c6519edc695c49825a35112df49ffc275bec318736e364c5991dfef6a29430f",
+    SpendingPage: "a03fc1d90df2029a330da832e2b389478e23f7318f6cfb15ef1403878a607eb7",
+    Budgets: "1f4b783aa7075191469478205ec55825ca2a37f1b8de21d11080d08dc8a0096b",
+    RecurringPage: "0026a77fc626a68877701731ac1269584c9b57881283dcaa0923372163668e1c",
     SubscriptionDetailPage: "9556941e4ff9bdc23d43801774a45e8dc01b67b547aab774abcd9815bb5b0f3c",
     RecurringUpcomingPage: "f1dd34f01b69dd0367a8b20a07b8b45977ab6d1ce0d31919b1b4143e5ba205bc",
-    TransactionCategoryPage: "1edf87cac5ca2a6428aeea4e35ae0521d0707f1e6e1fba6715ddc1d2a634fddf",
+    TransactionCategoryPage: "e69fb63dcf0c3ef5b9bd1622d03792b1798a75ea397d901b98b68a4e0d76b025",
     TransactionsPageTransactionTable: "5bc74a0e8d2c33efe103eeb87d6ec09d9b57fb34795597ef2e3f7d892d76a056",
     // The user's full category catalog (default + custom), with node ids. Captured
     // from app.rocketmoney.com.har (2026-07-05). Read-only; rotating is handled the
@@ -50,6 +66,9 @@ const CAPTURE_PAGE = {
 };
 /** Thrown when the session is no longer authenticated (cookie expired/revoked). */
 export class RMAuthError extends Error {
+}
+/** Thrown when RM no longer recognizes a persisted-query hash. */
+export class PersistedQueryNotFoundError extends Error {
 }
 // Relay global IDs are base64 of `Type:numericId`. RM already returns opaque
 // base64 `id` fields on nodes, so we only need to BUILD ids when the caller
@@ -174,10 +193,9 @@ async function rmExecuteUnlocked(opName, payload) {
         if (json.errors.some((e) => /PersistedQueryNotFound/i.test(e.message))) {
             const page = CAPTURE_PAGE[opName] ??
                 "the Rocket Money web app page that shows this data";
-            throw new Error(`RM ${opName}: PersistedQueryNotFound - Rocket Money rotated this query hash. ` +
-                `To re-capture: with devtools recording, load ${page}, find the POST to ` +
-                `client-api.rocketmoney.com/graphql whose operationName is ${opName}, copy ` +
-                `extensions.persistedQuery.sha256Hash, and update PERSISTED in client.ts.`);
+            throw new PersistedQueryNotFoundError(`RM ${opName}: PersistedQueryNotFound - Rocket Money rotated this query hash. ` +
+                `To fix: load ${page} with devtools recording, export a HAR, and run ` +
+                `\`npm run refresh-hashes -- <file.har>\` (it rewrites PERSISTED in src/rm/client.ts).`);
         }
         throw new Error(`RM ${opName}: ${json.errors.map((e) => e.message).join("; ")}`);
     }
@@ -231,19 +249,41 @@ export async function probeSession(cookieHeader) {
         return null;
     }
 }
-/** Persisted-query READ (hash captured from a HAR; may rotate server-side). */
+// Ops already warned about, so a rotated hash logs once per process, not per call.
+const fellBack = new Set();
+/**
+ * Persisted-query READ (hash captured from a HAR; may rotate server-side). When
+ * RM no longer knows the hash, resend with the query text from the web bundle -
+ * what the web client itself does on PersistedQueryNotFound - so a rotation
+ * degrades to a log line instead of a broken tool.
+ */
 async function rmGraphQL(body) {
-    return rmExecute(body.operationName, {
-        operationName: body.operationName,
-        variables: body.variables ?? {},
-        extensions: { persistedQuery: { version: 1, sha256Hash: PERSISTED[body.operationName] } },
-    });
+    const op = body.operationName;
+    const variables = body.variables ?? {};
+    try {
+        return await rmExecute(op, {
+            operationName: op,
+            variables,
+            extensions: { persistedQuery: { version: 1, sha256Hash: PERSISTED[op] } },
+        });
+    }
+    catch (err) {
+        const text = QUERY_TEXT[op];
+        if (!(err instanceof PersistedQueryNotFoundError) || !text)
+            throw err;
+        if (!fellBack.has(op)) {
+            fellBack.add(op);
+            console.warn(`[rm] ${err.message} Falling back to the bundled query text.`);
+        }
+        return rmExecute(op, { operationName: op, variables, query: text });
+    }
 }
 /**
- * Full-text WRITE mutation. Sends the whole query string rather than a persisted
- * hash on purpose, so RM rotating a read hash can never break the write path.
+ * Full-text operation: sends the whole query string rather than a persisted
+ * hash, so RM rotating a read hash can never break it. Every write uses this,
+ * as do the transaction-rule reads.
  */
-async function rmMutation(operationName, query, variables) {
+export async function rmFullText(operationName, query, variables) {
     return rmExecute(operationName, { operationName, query, variables });
 }
 // ── Generic helpers ────────────────────────────────────────────────
@@ -373,7 +413,7 @@ export async function getAssets() {
  */
 export async function updateAssetValue(assetNodeId, valueCents) {
     const today = ymd(new Date());
-    const data = await rmMutation("CreateAssetValue", "mutation CreateAssetValue($input: CreateAssetValueInput!) {\n  createAssetValue(input: $input) {\n    asset {\n      id\n      name\n      type\n      includeInNetWorth\n      valueCents\n      __typename\n    }\n    __typename\n  }\n}", { input: { assetNodeId, valueCents, date: today } });
+    const data = await rmFullText("CreateAssetValue", "mutation CreateAssetValue($input: CreateAssetValueInput!) {\n  createAssetValue(input: $input) {\n    asset {\n      id\n      name\n      type\n      includeInNetWorth\n      valueCents\n      __typename\n    }\n    __typename\n  }\n}", { input: { assetNodeId, valueCents, date: today } });
     const a = data.createAssetValue?.asset;
     if (!a)
         throw new Error(`createAssetValue returned no asset for "${assetNodeId}".`);
@@ -516,7 +556,7 @@ export async function updateSubscription(subscriptionNodeId, edit) {
     if (!node?.id)
         throw new Error(`No subscription found for id "${subscriptionNodeId}".`);
     const input = buildSubscriptionUpdateInput(node, edit);
-    const data = await rmMutation("UpdateSubscription", UPDATE_SUBSCRIPTION, { input });
+    const data = await rmFullText("UpdateSubscription", UPDATE_SUBSCRIPTION, { input });
     const saved = data.updateSubscription?.subscription;
     if (!saved)
         throw new Error(`updateSubscription returned no subscription for "${subscriptionNodeId}".`);
@@ -529,7 +569,7 @@ export async function updateSubscription(subscriptionNodeId, edit) {
  * deactivates a subscription RM detected from transactions.
  */
 export async function markSubscriptionActive(subscriptionNodeId) {
-    const data = await rmMutation("MarkSubscriptionActive", "mutation MarkSubscriptionActive($input: MarkSubscriptionActiveInput!) {\n  markSubscriptionActive(input: $input) {\n    subscription {\n      __typename\n      id\n      active\n    }\n    __typename\n  }\n}", { input: { subscriptionId: subscriptionNodeId } });
+    const data = await rmFullText("MarkSubscriptionActive", "mutation MarkSubscriptionActive($input: MarkSubscriptionActiveInput!) {\n  markSubscriptionActive(input: $input) {\n    subscription {\n      __typename\n      id\n      active\n    }\n    __typename\n  }\n}", { input: { subscriptionId: subscriptionNodeId } });
     return data.markSubscriptionActive?.subscription?.active ?? false;
 }
 /**
@@ -538,7 +578,7 @@ export async function markSubscriptionActive(subscriptionNodeId) {
  * a cancellation: the merchant keeps charging, RM just stops listing it.
  */
 export async function deleteSubscription(subscriptionNodeId) {
-    const data = await rmMutation("DeleteSubscription", "mutation DeleteSubscription($input: DeleteSubscriptionInput!) {\n  deleteSubscription(input: $input) {\n    __typename\n  }\n}", { input: { subscriptionId: subscriptionNodeId } });
+    const data = await rmFullText("DeleteSubscription", "mutation DeleteSubscription($input: DeleteSubscriptionInput!) {\n  deleteSubscription(input: $input) {\n    __typename\n  }\n}", { input: { subscriptionId: subscriptionNodeId } });
     return Boolean(data.deleteSubscription);
 }
 /** Upcoming bill/subscription charges in the next `days` days (default 28). */
@@ -563,9 +603,102 @@ export async function getCategoryTransactions(categoryNodeId, pageSize = 200) {
         },
     });
 }
+/** One Transaction node (LightTransaction fragment) -> RMTransaction, or null if it lacks the basics. */
+export function toRMTransaction(o) {
+    if (typeof o.id !== "string" || typeof o.amount !== "number")
+        return null;
+    const category = o.category;
+    const account = o.account;
+    return {
+        nodeId: o.id,
+        amountCents: o.amount,
+        date: String(o.date ?? ""),
+        originalDate: String(o.posted_date ?? o.date ?? ""),
+        note: o.note ?? null,
+        name: String(o.longName ?? o.shortName ?? ""),
+        customName: o.custom_name ?? null,
+        categoryLabel: category?.label ?? null,
+        accountId: account?.id ?? null,
+        ignoredFrom: o.ignoredFrom ?? null,
+        ruleIds: Array.isArray(o.transactionRuleNodeIds) ? o.transactionRuleNodeIds : [],
+    };
+}
+// The transactions-page query cut down to what RMTransaction reads, plus
+// posted_date (the bank date, which survives a date change) and custom_name.
+// Sent as full text, so it doesn't depend on a persisted hash. `gteDate` and
+// `ltDate` filter on `date`, the possibly-changed one (checked 2026-10-29).
+const TRANSACTION_SEARCH = `query TransactionSearch($query: String, $order: String, $accountIds: [ID!], $transactionCategoryIds: [ID!], $gteDate: Date, $ltDate: Date, $cursor: String, $pageSize: Int!) {
+  viewer {
+    id
+    transactions(first: $pageSize, accountIds: $accountIds, transactionCategoryIds: $transactionCategoryIds, query: $query, order: $order, gteDate: $gteDate, ltDate: $ltDate, excludeIgnoredFrom: null, after: $cursor) {
+      edges {
+        node {
+          __typename
+          id
+          date
+          posted_date
+          amount
+          shortName
+          longName(prependCustomName: false)
+          custom_name
+          note
+          ignoredFrom
+          transactionRuleNodeIds
+          category { id label __typename }
+          account { id __typename }
+        }
+        __typename
+      }
+      pageInfo { endCursor hasNextPage __typename }
+      __typename
+    }
+    __typename
+  }
+}`;
+/**
+ * Search transactions, newest first, paging 200 at a time until `limit` rows or
+ * the end. Returns nextCursor when more remain, so a caller can walk any window
+ * past the limit. Dedupes by node id.
+ */
+export async function searchTransactionsPage(opts) {
+    const all = [];
+    const limit = opts.limit ?? 1200;
+    let cursor = opts.cursor ?? null;
+    let nextCursor = null;
+    while (all.length < limit) {
+        const data = await rmFullText("TransactionSearch", TRANSACTION_SEARCH, {
+            query: opts.query ?? null,
+            order: "reverse:date",
+            accountIds: opts.accountIds ?? [],
+            transactionCategoryIds: opts.categoryIds ?? [],
+            gteDate: opts.gteDate ?? null,
+            ltDate: opts.ltDate ?? null,
+            cursor,
+            pageSize: 200,
+        });
+        const nodes = [];
+        collectByType(data, "Transaction", nodes);
+        const before = all.length;
+        for (const o of nodes) {
+            const t = toRMTransaction(o);
+            if (t)
+                all.push(t);
+        }
+        const pageInfo = findPageInfo(data);
+        nextCursor = pageInfo?.hasNextPage && pageInfo.endCursor && all.length > before ? pageInfo.endCursor : null;
+        if (!nextCursor)
+            break;
+        cursor = nextCursor;
+    }
+    const seen = new Set();
+    return {
+        transactions: all.filter((t) => (seen.has(t.nodeId) ? false : (seen.add(t.nodeId), true))),
+        nextCursor,
+    };
+}
 /**
  * Search transactions matching `query` (optional) on/after `gteDate`
- * (YYYY-MM-DD, optional). Paginates up to a safety cap and dedupes.
+ * (YYYY-MM-DD, optional), up to maxPages pages of 200.
  *
  * `accountIds` takes Account node ids (the same base64 ids getAccounts returns);
  * empty means every account. Without it there is no way to tell which card a
@@ -573,48 +706,51 @@ export async function getCategoryTransactions(categoryNodeId, pageSize = 200) {
  * account.
  */
 export async function searchTransactions(query, gteDate, maxPages = 6, accountIds = []) {
-    const all = [];
-    let cursor = null;
-    for (let page = 0; page < maxPages; page++) {
-        const data = await rmGraphQL({
-            operationName: "TransactionsPageTransactionTable",
-            variables: {
-                query,
-                order: "reverse:date",
-                accountIds,
-                transactionCategoryIds: [],
-                gteDate,
-                ltDate: null,
-                cursor,
-                pageSize: 200,
-                metaCategory: null,
-            },
-        });
-        const nodes = [];
-        collectByType(data, "Transaction", nodes);
-        const before = all.length;
-        for (const o of nodes) {
-            if (typeof o.id !== "string" || typeof o.amount !== "number")
-                continue;
-            const category = o.category;
-            const account = o.account;
-            all.push({
-                nodeId: o.id,
-                amountCents: o.amount,
-                date: String(o.date ?? ""),
-                note: o.note ?? null,
-                name: String(o.longName ?? o.shortName ?? ""),
-                categoryLabel: category?.label ?? null,
-                accountId: account?.id ?? null,
-            });
+    return (await searchTransactionsPage({ query, gteDate, accountIds, limit: maxPages * 200 })).transactions;
+}
+const CHANGE_DATE = `mutation ChangeTransactionDate($input: ChangeTransactionDateInput!) {
+  changeTransactionDate(input: $input) {
+    transaction { id date posted_date __typename }
+    __typename
+  }
+}`;
+/**
+ * WRITE: change transactions' dates. RM's mutation takes one transaction, so
+ * this is one call per id. `date` "original" resets each to its posted_date,
+ * which RM keeps untouched through any number of date changes (verified
+ * 2026-10-29). Returns each transaction's dates as RM saved them.
+ */
+export async function setTransactionsDate(nodeIds, date) {
+    const out = [];
+    for (const id of nodeIds) {
+        try {
+            let target = date;
+            if (date === "original") {
+                const read = await rmFullText("TransactionPostedDate", "query TransactionPostedDate($id: ID!) {\n  node(id: $id) {\n    id\n    ... on Transaction {\n      posted_date\n    }\n    __typename\n  }\n}", { id });
+                if (!read.node?.posted_date)
+                    throw new Error("no such transaction, or it has no posted date");
+                target = read.node.posted_date;
+            }
+            const data = await rmFullText("ChangeTransactionDate", CHANGE_DATE, { input: { transactionNodeId: id, date: target } });
+            const t = data.changeTransactionDate?.transaction;
+            if (!t?.date)
+                throw new Error("changeTransactionDate returned no transaction");
+            out.push({ id, date: t.date, originalDate: t.posted_date ?? "" });
         }
-        const pageInfo = findPageInfo(data);
-        if (!pageInfo?.hasNextPage || !pageInfo.endCursor || all.length === before)
-            break;
-        cursor = pageInfo.endCursor;
+        catch (err) {
+            if (err instanceof RMAuthError)
+                throw err;
+            out.push({ id, date: "", originalDate: "", error: err instanceof Error ? err.message : String(err) });
+        }
     }
-    const seen = new Set();
-    return all.filter((t) => (seen.has(t.nodeId) ? false : (seen.add(t.nodeId), true)));
+    return out;
+}
+/** WRITE: set ignore on many transactions in one round trip. Returns RM's countUpdated. */
+export async function setTransactionsIgnored(nodeIds, ignoredFrom) {
+    if (nodeIds.length === 0)
+        return 0;
+    const data = await rmFullText("SetTransactionsIgnored", "mutation SetTransactionsIgnored($input: SetTransactionsIgnoredInput!) {\n  setTransactionsIgnored(input: $input) {\n    transactions {\n      id\n      ignoredFrom\n      __typename\n    }\n    countUpdated\n    transactionOverrideIds\n    __typename\n  }\n}", { input: { transactionNodeIds: nodeIds, setIgnored: ignoredFrom } });
+    return data.setTransactionsIgnored?.countUpdated ?? 0;
 }
 /** base64(`TransactionCategory:<id>`) for a numeric category id. */
 export function categoryNodeId(numericId) {
@@ -632,16 +768,7 @@ export async function getTransactionCategories() {
         if (!nodeId || seen.has(nodeId))
             continue;
         seen.add(nodeId);
-        cats.push({
-            nodeId,
-            id: fromNodeId(nodeId)?.numericId ?? "",
-            label: String(o.label ?? ""),
-            type: String(o.type ?? ""),
-            categoryType: String(o.categoryType ?? ""),
-            includeInSpending: Boolean(o.includeInSpending),
-            includeInEarnings: Boolean(o.includeInEarnings),
-            taxDeductible: Boolean(o.taxDeductible),
-        });
+        cats.push(toCategory(o));
     }
     return cats.sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -678,9 +805,106 @@ export async function resolveCategoryNodeId(input) {
         .map((c) => c.label)
         .join(", ")}`);
 }
+const CATEGORY_FIELDS = "id\n      label\n      type\n      categoryType\n      iconKey\n      includeInSpending\n      includeInEarnings\n      taxDeductible\n      colors {\n        base\n        __typename\n      }\n      __typename";
+// The web app's own defaults for a new category's icon, and a neutral gray.
+const DEFAULT_ICON = "coffee";
+const DEFAULT_COLOR = "rgb(117, 117, 117)";
+function toCategory(o) {
+    const nodeId = String(o.id ?? "");
+    return {
+        nodeId,
+        id: fromNodeId(nodeId)?.numericId ?? "",
+        label: String(o.label ?? ""),
+        type: String(o.type ?? ""),
+        categoryType: String(o.categoryType ?? ""),
+        includeInSpending: Boolean(o.includeInSpending),
+        includeInEarnings: Boolean(o.includeInEarnings),
+        taxDeductible: Boolean(o.taxDeductible),
+        iconKey: String(o.iconKey ?? ""),
+        color: String(o.colors?.base ?? ""),
+    };
+}
+/** WRITE: create a custom category. Returns it as RM saved it. */
+export async function createCategory(label, categoryType, opts = {}) {
+    const data = await rmFullText("CreateCustomTransactionCategoryWithCategoryTypes", `mutation CreateCustomTransactionCategoryWithCategoryTypes($input: createCustomTransactionCategoryWithCategoryTypeInput!) {\n  createCustomTransactionCategoryWithCategoryType(input: $input) {\n    transactionCategory {\n      ${CATEGORY_FIELDS}\n    }\n    __typename\n  }\n}`, {
+        input: {
+            label: label.trim(),
+            categoryType,
+            taxDeductible: opts.taxDeductible ?? false,
+            color: opts.color ?? DEFAULT_COLOR,
+            iconKey: opts.iconKey ?? DEFAULT_ICON,
+        },
+    });
+    const cat = data.createCustomTransactionCategoryWithCategoryType?.transactionCategory;
+    if (!cat)
+        throw new Error(`createCustomTransactionCategory returned no category for "${label}".`);
+    _catCache = null;
+    return toCategory(cat);
+}
+/** A category from the catalog by node id, numeric id or label; throws unless it is custom. */
+async function customCategory(input) {
+    const nodeId = await resolveCategoryNodeId(input);
+    const cat = (await getTransactionCategories()).find((c) => c.nodeId === nodeId);
+    if (!cat)
+        throw new Error(`No category "${input}". Use list_categories to see valid options.`);
+    if (cat.type !== "custom") {
+        throw new Error(`"${cat.label}" is a default Rocket Money category; only custom categories can be changed or deleted.`);
+    }
+    return cat;
+}
+/** WRITE: rename or regroup a custom category. Fields left undefined keep their current values. */
+export async function updateCategory(input, edit) {
+    const cat = await customCategory(input);
+    const data = await rmFullText("EditCustomTransactionCategoryWithCategoryType", `mutation EditCustomTransactionCategoryWithCategoryType($input: EditCustomTransactionCategoryWithCategoryTypeInput!) {\n  editCustomTransactionCategoryWithCategoryType(input: $input) {\n    transactionCategory {\n      ${CATEGORY_FIELDS}\n    }\n    __typename\n  }\n}`, {
+        input: {
+            transactionCategoryNodeId: cat.nodeId,
+            label: edit.label?.trim() || cat.label,
+            categoryType: edit.categoryType ?? cat.categoryType,
+            taxDeductible: edit.taxDeductible ?? cat.taxDeductible,
+            color: edit.color ?? (cat.color || DEFAULT_COLOR),
+            iconKey: edit.iconKey ?? (cat.iconKey || DEFAULT_ICON),
+        },
+    });
+    const saved = data.editCustomTransactionCategoryWithCategoryType?.transactionCategory;
+    if (!saved)
+        throw new Error(`editCustomTransactionCategory returned no category for "${input}".`);
+    _catCache = null;
+    return toCategory(saved);
+}
+/**
+ * WRITE: delete a custom category. With reassignTo, every transaction in it is
+ * moved there first (RM's delete would leave them Uncategorized). Returns how
+ * many were moved.
+ */
+export async function deleteCategory(input, reassignTo) {
+    const cat = await customCategory(input);
+    let reassigned = 0;
+    let target = null;
+    if (reassignTo) {
+        target = await resolveCategoryNodeId(reassignTo);
+        if (target === cat.nodeId)
+            throw new Error("reassign_to is the category being deleted.");
+        const ids = [];
+        let cursor = null;
+        do {
+            const page = await searchTransactionsPage({ categoryIds: [cat.nodeId], cursor, limit: 2000 });
+            ids.push(...page.transactions.map((t) => t.nodeId));
+            cursor = page.nextCursor;
+        } while (cursor);
+        for (let i = 0; i < ids.length; i += 500) {
+            reassigned += await setTransactionsCategory(ids.slice(i, i + 500), target);
+        }
+        if (reassigned < ids.length) {
+            throw new Error(`Not deleted: moved only ${reassigned} of ${ids.length} transactions out of "${cat.label}". Nothing was deleted; retry or move the rest by hand.`);
+        }
+    }
+    await rmFullText("DeleteCustomTransactionCategory", "mutation DeleteCustomTransactionCategory($input: DeleteCustomTransactionCategoryInput!) {\n  deleteCustomTransactionCategory(input: $input) {\n    viewer {\n      id\n      __typename\n    }\n    __typename\n  }\n}", { input: { transactionCategoryNodeId: cat.nodeId } });
+    _catCache = null;
+    return { deleted: cat, reassigned, reassignedTo: target };
+}
 /** WRITE: set (or clear, with "") a transaction's free-text note. Returns the saved note. */
 export async function setTransactionNote(nodeId, note) {
-    const data = await rmMutation("SetTransactionNote", "mutation SetTransactionNote($input: SetTransactionNoteInput!) {\n  setTransactionNote(input: $input) {\n    __typename\n    transaction {\n      __typename\n      id\n      note\n    }\n  }\n}", { input: { transactionNodeId: nodeId, note } });
+    const data = await rmFullText("SetTransactionNote", "mutation SetTransactionNote($input: SetTransactionNoteInput!) {\n  setTransactionNote(input: $input) {\n    __typename\n    transaction {\n      __typename\n      id\n      note\n    }\n  }\n}", { input: { transactionNodeId: nodeId, note } });
     return data.setTransactionNote?.transaction?.note ?? note;
 }
 /**
@@ -691,7 +915,7 @@ export async function setTransactionNote(nodeId, note) {
 export async function setTransactionsCategory(nodeIds, catNodeId) {
     if (nodeIds.length === 0)
         return 0;
-    const data = await rmMutation("SetTransactionsCategory", "mutation SetTransactionsCategory($input: SetTransactionsCategoryInput!) {\n  setTransactionsCategory(input: $input) {\n    transactions {\n      id\n      category {\n        id\n        __typename\n      }\n      ignoredFrom\n      __typename\n    }\n    countUpdated\n    transactionOverrideIds\n    __typename\n  }\n}", {
+    const data = await rmFullText("SetTransactionsCategory", "mutation SetTransactionsCategory($input: SetTransactionsCategoryInput!) {\n  setTransactionsCategory(input: $input) {\n    transactions {\n      id\n      category {\n        id\n        __typename\n      }\n      ignoredFrom\n      __typename\n    }\n    countUpdated\n    transactionOverrideIds\n    __typename\n  }\n}", {
         input: {
             transactionNodeIds: nodeIds,
             transactionCategoryNodeId: catNodeId,

@@ -13,7 +13,8 @@
     "deploy": "npm run build && launchctl kickstart -k gui/$(id -u)/com.akseldkw.rocketmoney-mcp",
     "dev": "tsx watch src/index.ts",
     "test": "node --import tsx --test test/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "refresh-hashes": "tsx scripts/refresh-hashes.ts"
   },
   "engines": {
     "node": ">=20"
@@ -30,6 +31,9 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.0",
+    "@urql/core": "^6.0.3",
+    "acorn": "^8.19.0",
+    "graphql": "^17.0.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
