@@ -161,7 +161,9 @@ export function attemptLogin(reason, force = false) {
     }
     inFlight = runLogin(reason)
         .then((r) => {
-        failures = r.ok ? 0 : failures + 1;
+        // An offline run never reached Auth0, so it doesn't grow the backoff:
+        // otherwise hours offline would delay the login after the network returns.
+        failures = r.ok ? 0 : r.offline ? failures : failures + 1;
         recordResult(reason, r);
         return r;
     })
@@ -189,11 +191,11 @@ async function runLogin(reason) {
     if (mode !== "auto" && mode !== "1")
         return doLogin(reason, false);
     let r = await doLogin(reason, true);
-    if (r.ok || r.reachedMfa)
+    if (r.ok || r.reachedMfa || r.offline)
         return r;
     console.warn(`[auto-login] headless run failed (${r.error}); retrying headless`);
     r = await doLogin(reason, true);
-    if (r.ok || r.reachedMfa || mode === "1")
+    if (r.ok || r.reachedMfa || r.offline || mode === "1")
         return r;
     console.warn(`[auto-login] headless retry failed (${r.error}); retrying headful`);
     return doLogin(reason, false);
@@ -295,10 +297,12 @@ async function doLogin(reason, headless) {
         // chain intermittently exceeds the nav budget, but the page usually loaded
         // fine anyway. Catching it lets firstVisible() below poll for the form rather
         // than the whole run dying on a slow (but successful) navigation.
+        let navError = "";
         try {
             await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 90000 });
         }
         catch (e) {
+            navError = e.message;
             console.warn(`[auto-login] initial nav slow (${e.message}); polling for the form anyway`);
         }
         await sleep(3000);
@@ -332,6 +336,11 @@ async function doLogin(reason, headless) {
         const emailEl = await firstVisible(page, ["input[name='username']", "input[type='email']", "input#username", "input[autocomplete='username']"], 45000);
         if (!emailEl) {
             await snapshot(page, "noform");
+            // No network at all (laptop offline / asleep): retrying, least of all in a
+            // headful window, can't help, so say so and let the next tick try again.
+            if (/net::ERR_(INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|ADDRESS_UNREACHABLE)/.test(navError)) {
+                return { ok: false, offline: true, error: `offline (${navError})` };
+            }
             return { ok: false, error: "no session and no login form (possible attack-protection block; see noform.png)" };
         }
         await emailEl.click({ count: 3 });

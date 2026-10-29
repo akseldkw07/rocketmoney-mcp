@@ -133,6 +133,7 @@ export interface LoginResult {
   ok: boolean;
   needsOtp?: boolean; // a run is (or was) waiting for an SMS code
   reachedMfa?: boolean; // the run got as far as the SMS challenge
+  offline?: boolean; // the machine had no network; another browser won't help
   error?: string;
 }
 
@@ -200,7 +201,9 @@ export function attemptLogin(reason: string, force = false): Promise<LoginResult
   }
   inFlight = runLogin(reason)
     .then((r) => {
-      failures = r.ok ? 0 : failures + 1;
+      // An offline run never reached Auth0, so it doesn't grow the backoff:
+      // otherwise hours offline would delay the login after the network returns.
+      failures = r.ok ? 0 : r.offline ? failures : failures + 1;
       recordResult(reason, r);
       return r;
     })
@@ -228,10 +231,10 @@ async function runLogin(reason: string): Promise<LoginResult> {
   const mode = HEADLESS();
   if (mode !== "auto" && mode !== "1") return doLogin(reason, false);
   let r = await doLogin(reason, true);
-  if (r.ok || r.reachedMfa) return r;
+  if (r.ok || r.reachedMfa || r.offline) return r;
   console.warn(`[auto-login] headless run failed (${r.error}); retrying headless`);
   r = await doLogin(reason, true);
-  if (r.ok || r.reachedMfa || mode === "1") return r;
+  if (r.ok || r.reachedMfa || r.offline || mode === "1") return r;
   console.warn(`[auto-login] headless retry failed (${r.error}); retrying headful`);
   return doLogin(reason, false);
 }
@@ -333,9 +336,11 @@ async function doLogin(reason: string, headless: boolean): Promise<LoginResult> 
     // chain intermittently exceeds the nav budget, but the page usually loaded
     // fine anyway. Catching it lets firstVisible() below poll for the form rather
     // than the whole run dying on a slow (but successful) navigation.
+    let navError = "";
     try {
       await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 90000 });
     } catch (e) {
+      navError = (e as Error).message;
       console.warn(`[auto-login] initial nav slow (${(e as Error).message}); polling for the form anyway`);
     }
     await sleep(3000);
@@ -375,6 +380,11 @@ async function doLogin(reason: string, headless: boolean): Promise<LoginResult> 
     );
     if (!emailEl) {
       await snapshot(page, "noform");
+      // No network at all (laptop offline / asleep): retrying, least of all in a
+      // headful window, can't help, so say so and let the next tick try again.
+      if (/net::ERR_(INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|ADDRESS_UNREACHABLE)/.test(navError)) {
+        return { ok: false, offline: true, error: `offline (${navError})` };
+      }
       return { ok: false, error: "no session and no login form (possible attack-protection block; see noform.png)" };
     }
     await emailEl.click({ count: 3 });

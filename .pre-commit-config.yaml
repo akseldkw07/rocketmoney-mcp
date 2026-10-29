@@ -117,7 +117,9 @@ repos:
         # Claude settings are written by Claude Code / jean-claude in their own
         # format (2-space); reformatting them only creates diffs, and through a
         # dotfiles/ symlink it would rewrite the live ~/.claude/settings.json.
-        exclude: ^backup/|(^|/)claude-settings\.json$|(^|/)\.claude/
+        # npm (package*.json), tsc and Chrome tooling write these 2-space; a 4-space
+        # rewrite gets undone by the next `npm install` and churns the lockfile.
+        exclude: ^backup/|(^|/)claude-settings\.json$|(^|/)\.claude/|^(package(-lock)?|tsconfig)\.json$|^extension/manifest\.json$
       - id: check-case-conflict
       - id: fix-byte-order-marker
       - id: check-shebang-scripts-are-executable
