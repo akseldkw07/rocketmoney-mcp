@@ -92,25 +92,67 @@ as tools.
 ## How auth works
 
 Rocket Money has no third-party OAuth, so this server reuses your own web session.
-You grab the `tb.auth0.sid` cookie from a logged-in `app.rocketmoney.com` browser tab
-and paste it into the server's `/auth` page (or let the [Chrome extension](extension/)
-push it to your server automatically). The server keeps a **rotating cookie jar**
-(Rocket Money re-issues the cookie on every response, ~3h48m rolling TTL) persisted to
-disk, and runs a keepalive loop. There is no offline refresh token, so when the session
-eventually expires you re-paste a fresh cookie.
 
-The cookie lives only on the machine running this server and is sent only to Rocket
-Money's own API.
+**Session cookie.** The server holds Rocket Money's `tb.auth0.sid` cookie in a
+**rotating cookie jar** persisted to `$ROCKETMONEY_STATE_DIR/session.json`: every
+response re-issues the cookie, and every API call is serialized so two requests can
+never race the rotation. A keepalive loop calls `RefreshAuthToken` every
+`ROCKETMONEY_KEEPALIVE_MS`. There is no offline refresh token, and in practice the
+session dies roughly every 30-60 minutes, so it has to be re-created regularly.
+
+**Seeding it by hand.** Paste the cookie value from a logged-in `app.rocketmoney.com`
+tab into the `/auth` page (just the value is fine, or the whole Cookie header).
+
+**Auto-login** (`ROCKETMONEY_AUTO_LOGIN=1` plus `ROCKETMONEY_EMAIL` /
+`ROCKETMONEY_PASSWORD`; the launchd setup reads these from the macOS Keychain, see
+`start.sh`). When the session dies, the server drives Rocket Money's Auth0 login in
+Chrome (`rebrowser-puppeteer-core` + the stealth plugin) with a **persistent
+Chrome profile** in the state dir, then seeds the new cookie into the jar:
+
+1. *Warm renewal:* if the profile still holds a working session, it is reused (a few
+   seconds, no form).
+2. *Form login:* otherwise it fills in email and password. Because the profile is a
+   device Auth0 already trusts, this usually skips MFA.
+3. *SMS MFA:* if Auth0 does challenge, the run waits up to ~4 minutes for the code,
+   typed into `/auth` (`POST /auth/otp`) or forwarded from a phone
+   (`POST /auth/sms`, guarded by `ROCKETMONEY_SMS_WEBHOOK_SECRET`).
+
+Details that keep it reliable:
+
+- **Every candidate cookie is checked against the API** (`AuthenticationCheck`) before
+  it is saved. A Chrome profile keeps stale cookies around, and saving one used to
+  report success and then fail again minutes later.
+- **Headless mode** (`ROCKETMONEY_LOGIN_HEADLESS`): with `auto`, the run is headless,
+  retried headless once, and only then falls back to a visible window. No retry once a
+  run reaches the SMS step (that would text a second code). On Fly the default
+  headful mode is kept: from a datacenter IP headless gets bot-flagged.
+- **Rate limit:** at most one run at a time, with exponential backoff (15 min, 30 min,
+  ... capped at 6 h) to stay clear of Auth0 attack protection. The `/auth` "Log in now"
+  button bypasses the cooldown.
+- **Offline:** if Chrome reports no network, the run stops without retrying or
+  opening a window, and does not grow the backoff.
+- Each run's outcome is written to `$ROCKETMONEY_STATE_DIR/login-last.json` (logs have
+  no timestamps), and failures save a screenshot (`login-<tag>.png`) beside it.
+
+The cookie, the Chrome profile and the credentials stay on the machine running this
+server; the cookie is sent only to Rocket Money's own API.
 
 ## Endpoints
 
 | Path | Purpose |
 | --- | --- |
 | `POST /mcp` | MCP streamable-HTTP transport (stateless) |
-| `GET /auth` | Paste-a-cookie session page |
-| `POST /auth/submit` | Session intake |
-| `POST /auth/ingest` | Session intake for the Chrome extension |
+| `GET /auth` (also `/`) | Session page: paste a cookie, see login status, enter an SMS code |
+| `POST /auth/submit` | Session intake (pasted cookie) |
+| `POST /auth/login` | Start an auto-login now, bypassing the cooldown |
+| `POST /auth/otp` | Hand an SMS code to a login run waiting on MFA |
+| `POST /auth/sms` | Phone SMS-forwarder webhook (`X-SMS-Secret` header or `?secret=`) |
+| `GET /api/transactions[/:slug]` | Last `ROCKETMONEY_API_LOOKBACK_DAYS` of transactions as JSON (bearer `ROCKETMONEY_API_TOKEN`; fails closed when unset) |
+| `GET /api/budget` | Budgets, recurring merchants, upcoming bills and spending in one read (same token) |
 | `GET /healthz` | Health check |
+
+`/auth/ingest` (the Chrome extension's push target) is **not registered in this
+build**: it accepted requests from any website. See Known shortcomings.
 
 ## Running locally
 
@@ -128,8 +170,15 @@ ROCKETMONEY_STATE_DIR=./.state PORT=8080 node dist/index.js
 | `PORT` | `8080` | HTTP port |
 | `ROCKETMONEY_STATE_DIR` | `/data/rocketmoney` | Where the rotating session is persisted |
 | `ROCKETMONEY_READ_ONLY` | unset | `1` to leave the write tools unregistered |
+| `ROCKETMONEY_KEEPALIVE_MS` | `7200000` | Keepalive interval (2h; the launchd plist uses 30 min) |
+| `ROCKETMONEY_AUTO_LOGIN` | unset | `1` to re-login automatically when the session dies |
+| `ROCKETMONEY_EMAIL` / `ROCKETMONEY_PASSWORD` | unset | Login credentials for auto-login (`start.sh` reads them from the Keychain) |
 | `ROCKETMONEY_LOGIN_HEADLESS` | `0` | Auto-login browser: `0` headful (needed on Fly), `auto` headless with a headful fallback, `1` headless only |
-| `ROCKETMONEY_KEEPALIVE_MS` | `7200000` | Keepalive interval (2h) |
+| `CHROMIUM_PATH` | `/usr/bin/chromium` | Browser binary for auto-login |
+| `ROCKETMONEY_LOGIN_PROXY` | unset | Proxy for the login browser (e.g. a residential SOCKS5 exit for Fly) |
+| `ROCKETMONEY_SMS_WEBHOOK_SECRET` | unset | Shared secret for `POST /auth/sms` |
+| `ROCKETMONEY_API_TOKEN` | unset | Bearer token for `/api/*` (unset = `/api/*` refuses every request) |
+| `ROCKETMONEY_API_LOOKBACK_DAYS` | `7` | Window returned by `/api/transactions` |
 | `ROCKETMONEY_WEB_CLIENT_VERSION` | captured default | `x-truebill-web-client-version` header |
 
 ## Deployment
@@ -152,6 +201,40 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   `operationName` matches, copy `extensions.persistedQuery.sha256Hash`, and update
   `PERSISTED` in `src/rm/client.ts`.
 - Not affiliated with or endorsed by Rocket Money / Rocket Companies.
+
+## Known shortcomings
+
+- **Short sessions.** Rocket Money's session lasts roughly 30-60 minutes in practice,
+  so auto-login runs many times a day. It depends on a stored password and on Auth0
+  not tightening bot detection; if that changes, logins fail until it is fixed.
+- **Partial outages can still open a window.** Only "no network" errors count as
+  offline. A timeout or connection reset gets the headless retry and then the visible
+  fallback.
+- **Chrome extension is orphaned.** `extension/` still pushes to `/auth/ingest`, which
+  this build no longer registers. Paste at `/auth` or rely on auto-login instead.
+- **Query hashes rotate.** Reads use persisted-query hashes that Rocket Money
+  invalidates every few weeks; re-capturing them is manual (see Notes).
+- **Subscriptions can't be marked cancelled** through the API (see above), only deleted.
+- **Logs have no timestamps**; `login-last.json` is the only timestamped record of a
+  login run.
+- **No CI.** Tests (`npm test`) and the typecheck only run locally.
+- **USD only.**
+
+## TODO
+
+- [ ] Decide on `feat/generic-transaction-writes`: it has a gate-note write endpoint
+      (with a test) and a fix for the 2026-10-27 query-hash rotation that are not in
+      `main`, and it conflicts with the current `client.ts` / `index.ts`.
+- [ ] Clean up the 7 `dependabot/npm_and_yarn/*` branches copied from upstream
+      (`312-dev/rocketmoney-mcp`): delete them, or apply the bumps (notably MCP SDK
+      1.32.0) in a PR, and consider turning Dependabot on for this fork.
+- [ ] Remove `extension/`, or bring back `/auth/ingest` behind authentication.
+- [ ] Timestamp the server log.
+- [ ] Add CI for `npm test` and `npm run typecheck`.
+- [ ] Treat timeouts and connection resets that come from local network trouble as
+      offline, without hiding real Rocket Money failures.
+- [ ] Re-capture persisted-query hashes automatically (e.g. from a headless page load)
+      instead of by hand.
 
 ## License
 
