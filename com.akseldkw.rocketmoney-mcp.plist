@@ -15,7 +15,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/zsh</string>
-        <string>/Users/Akseldkw/coding/rocketmoney-mcp/start.sh</string>
+        <string>/Users/Akseldkw/coding/mcp/rocketmoney-mcp/start.sh</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
