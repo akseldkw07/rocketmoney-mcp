@@ -22,10 +22,12 @@ because it names people and amounts.
 
 ## 1. Hard limits
 
-- **Venmo is read-only.** Use only `get_transactions`, `get_outgoing_requests`,
-  `get_pending_requests`, `get_friends`, `lookup_user`, `search_users`, `get_my_profile`.
-  Never call `send_money`, `request_money`, `split_request`, `complete_request`,
-  `deny_request`, `cancel_request` or `remind_request`.
+- **Venmo: reads, and requests for money I'm owed.** Reads: `get_transactions`,
+  `get_outgoing_requests`, `get_pending_requests`, `get_friends`, `lookup_user`,
+  `search_users`, `get_my_profile`. Requesting money (`request_money`, `split_request`) is
+  allowed, under section 4a. Never call `send_money`, `complete_request`, `deny_request`,
+  `cancel_request` or `remind_request`: nothing that pays, or that changes a request
+  someone else made.
 - **Rocket Money writes allowed:** `set_transactions_category`, `set_transaction_ignore`,
   `set_transaction_notes`, `set_transaction_date`, and rule writes only under section 6.
   Never call `delete_category`, `update_category`, `update_subscription`,
@@ -95,6 +97,28 @@ Work through these in order. Record a confidence for each: **high**, **medium** 
    in or out of it, net of ignore changes. Any unexplained difference is a bug: record it,
    and don't make rule changes this run.
 5. `Venmo` must hold only transfers between my own accounts.
+
+## 4a. Requesting money I'm owed
+
+A request notifies the other person, so send one only when all of these hold:
+- **The share is certain.** I paid a group charge, and that person's share is stated
+  somewhere: a Splitwise group split, a note or message agreeing it, the same split others
+  in the group already paid (e.g. the $384 Airbnb shares), or a known pass-through in
+  `CATEGORIZATION.local.md`. Never estimate a share.
+- **Nothing is pending or paid.** `get_outgoing_requests` has no open request to them for
+  this, and `get_transactions` shows no matching payment from them since the charge. The
+  Venmo server's duplicate guard is a backstop, not the check.
+- **It's due.** At least 7 days have passed since the charge, or since the others in the
+  group paid their shares.
+- **The recipient is right.** They're in `get_friends` (look them up there, never by a
+  guessed username).
+
+Limits: at most 3 requests per run and at most $500 each. Anything larger or less certain
+goes under needs review instead. The note names the charge, e.g. `airbnb (homecoming,
+Oct 2026)`. Use `split_request` only when the whole split is known.
+
+Log each request under fixes made (change `Venmo request $X to <name>`). When it's paid,
+file the payment by purpose like any repayment.
 
 ## 5. Spot patterns and propose rules
 
