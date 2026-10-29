@@ -11,6 +11,10 @@ export function usd(cents) {
         return null;
     return Math.round(cents) / 100;
 }
+/** USD dollars -> integer cents, the unit every Rocket Money money field uses on the wire. */
+export function toCents(dollars) {
+    return Math.round(dollars * 100);
+}
 /** Round a sum of dollar amounts back to cents (float addition drifts). */
 export function roundUsd(dollars) {
     return Math.round(dollars * 100) / 100;

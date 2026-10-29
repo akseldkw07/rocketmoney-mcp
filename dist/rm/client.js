@@ -791,16 +791,26 @@ export async function searchTransactionsPage(opts) {
         nextCursor,
     };
 }
-/** Every transaction matching `opts`, walking the cursor to the end (no row limit). */
-export async function searchAllTransactions(opts) {
+/**
+ * Walk a cursor-paged connection to the end. `fetchPage` gets the cursor (null
+ * first) and returns that page's items and the next cursor, or null when done.
+ */
+export async function collectPages(fetchPage) {
     const all = [];
     let cursor = null;
     do {
-        const page = await searchTransactionsPage({ ...opts, cursor, limit: SCAN_PAGE_LIMIT });
-        all.push(...page.transactions);
-        cursor = page.nextCursor;
+        const page = await fetchPage(cursor);
+        all.push(...page.items);
+        cursor = page.next;
     } while (cursor);
     return all;
+}
+/** Every transaction matching `opts`, walking the cursor to the end (no row limit). */
+export async function searchAllTransactions(opts) {
+    return collectPages(async (cursor) => {
+        const page = await searchTransactionsPage({ ...opts, cursor, limit: SCAN_PAGE_LIMIT });
+        return { items: page.transactions, next: page.nextCursor };
+    });
 }
 /**
  * WRITE: change transactions' dates. RM's mutation takes one transaction, so
@@ -1008,11 +1018,6 @@ export async function setTransactionsNote(items) {
             : { id: it.nodeId, note: null, error: explainItemError(r.error) };
     });
     return out;
-}
-/** WRITE: set (or clear, with "") a transaction's free-text note. Returns the saved note. */
-export async function setTransactionNote(nodeId, note) {
-    const data = await rmFullText("SetTransactionNote", "mutation SetTransactionNote($input: SetTransactionNoteInput!) {\n  setTransactionNote(input: $input) {\n    __typename\n    transaction {\n      __typename\n      id\n      note\n    }\n  }\n}", { input: { transactionNodeId: nodeId, note } });
-    return data.setTransactionNote?.transaction?.note ?? note;
 }
 /**
  * WRITE: set the spending category on many transactions in one round trip.

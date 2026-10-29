@@ -946,16 +946,29 @@ export async function searchTransactionsPage(
   };
 }
 
-/** Every transaction matching `opts`, walking the cursor to the end (no row limit). */
-export async function searchAllTransactions(opts: Omit<SearchOptions, "cursor" | "limit">): Promise<RMTransaction[]> {
-  const all: RMTransaction[] = [];
+/**
+ * Walk a cursor-paged connection to the end. `fetchPage` gets the cursor (null
+ * first) and returns that page's items and the next cursor, or null when done.
+ */
+export async function collectPages<T>(
+  fetchPage: (cursor: string | null) => Promise<{ items: T[]; next: string | null }>,
+): Promise<T[]> {
+  const all: T[] = [];
   let cursor: string | null = null;
   do {
-    const page = await searchTransactionsPage({ ...opts, cursor, limit: SCAN_PAGE_LIMIT });
-    all.push(...page.transactions);
-    cursor = page.nextCursor;
+    const page = await fetchPage(cursor);
+    all.push(...page.items);
+    cursor = page.next;
   } while (cursor);
   return all;
+}
+
+/** Every transaction matching `opts`, walking the cursor to the end (no row limit). */
+export async function searchAllTransactions(opts: Omit<SearchOptions, "cursor" | "limit">): Promise<RMTransaction[]> {
+  return collectPages(async (cursor) => {
+    const page = await searchTransactionsPage({ ...opts, cursor, limit: SCAN_PAGE_LIMIT });
+    return { items: page.transactions, next: page.nextCursor };
+  });
 }
 
 /**
@@ -1252,16 +1265,6 @@ export async function setTransactionsNote(
       : { id: it.nodeId, note: null, error: explainItemError(r.error) };
   });
   return out;
-}
-
-/** WRITE: set (or clear, with "") a transaction's free-text note. Returns the saved note. */
-export async function setTransactionNote(nodeId: string, note: string): Promise<string> {
-  const data = await rmFullText<{ setTransactionNote?: { transaction?: { note?: string } } }>(
-    "SetTransactionNote",
-    "mutation SetTransactionNote($input: SetTransactionNoteInput!) {\n  setTransactionNote(input: $input) {\n    __typename\n    transaction {\n      __typename\n      id\n      note\n    }\n  }\n}",
-    { input: { transactionNodeId: nodeId, note } },
-  );
-  return data.setTransactionNote?.transaction?.note ?? note;
 }
 
 /**

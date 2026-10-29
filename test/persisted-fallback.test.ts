@@ -1,9 +1,6 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { seedSession } from "../src/rm/session.js";
+import { freshSession, mockGraphQL, realFetch } from "./helpers.js";
 import {
   batchAliased,
   getBudgets,
@@ -13,7 +10,6 @@ import {
   toRMTransaction,
 } from "../src/rm/client.js";
 
-const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
@@ -52,12 +48,8 @@ test("toRMTransaction reads ignore state, applied rules and both dates", () => {
 });
 
 test("batchAliased sends 50 aliases per request and keeps per-item failures to that item", async () => {
-  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-batch-"));
-  seedSession("tb.auth0.sid=test");
-  const requests: Record<string, unknown>[] = [];
-  globalThis.fetch = (async (_url: string, init: { body: string }) => {
-    const b = JSON.parse(init.body);
-    requests.push(b);
+  freshSession();
+  const requests = mockGraphQL((b) => {
     const vars = b.variables as Record<string, { id: string }>;
     const data: Record<string, unknown> = {};
     const errors: unknown[] = [];
@@ -68,11 +60,8 @@ test("batchAliased sends 50 aliases per request and keeps per-item failures to t
         errors.push({ message: "An error occurred.", path: [alias] });
       } else data[alias] = { id: v.id };
     }
-    return new Response(JSON.stringify({ data, ...(errors.length ? { errors } : {}) }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }) as typeof fetch;
+    return { data, ...(errors.length ? { errors } : {}) };
+  });
 
   const inputs = Array.from({ length: 60 }, (_, i) => ({ id: i === 7 ? "bad" : `t${i}` }));
   const out = await batchAliased<{ id: string }>("Op", "mutation", "doThing", { name: "input", type: "In!" }, "id", inputs);
@@ -85,12 +74,8 @@ test("batchAliased sends 50 aliases per request and keeps per-item failures to t
 });
 
 test("apply_to_all reads the merchant name off the transaction, sweeps every page, and recategorizes all of them", async () => {
-  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-sweep-"));
-  seedSession("tb.auth0.sid=test");
-  const ops: { op: string; vars: Record<string, unknown> }[] = [];
-  globalThis.fetch = (async (_url: string, init: { body: string }) => {
-    const b = JSON.parse(init.body);
-    ops.push({ op: b.operationName, vars: b.variables });
+  freshSession();
+  const ops = mockGraphQL((b) => {
     const node = (id: string) => ({ __typename: "Transaction", id, amount: 100, date: "2020-01-01" });
     const data =
       b.operationName === "TransactionName"
@@ -104,30 +89,23 @@ test("apply_to_all reads the merchant name off the transaction, sweeps every pag
               },
             }
           : { setTransactionsCategory: { countUpdated: (b.variables.input.transactionNodeIds as string[]).length } };
-    return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
+    return { data };
+  });
 
   assert.equal(await setTransactionCategory("old", "cat", true), 4);
-  assert.deepEqual(ops.map((o) => o.op), ["TransactionName", "TransactionSearch", "TransactionSearch", "SetTransactionsCategory"]);
-  assert.equal(ops[1].vars.query, "ACME CO");
+  assert.deepEqual(ops.map((o) => o.operationName), ["TransactionName", "TransactionSearch", "TransactionSearch", "SetTransactionsCategory"]);
+  assert.equal(ops[1].variables.query, "ACME CO");
   assert.deepEqual(
-    (ops[3].vars.input as { transactionNodeIds: string[] }).transactionNodeIds.sort(),
+    (ops[3].variables.input as { transactionNodeIds: string[] }).transactionNodeIds.sort(),
     ["old", "t1", "t2", "t3"],
   );
 });
 
 test("a rotated persisted hash falls back to the bundled query text", async () => {
-  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-pq-"));
-  seedSession("tb.auth0.sid=test");
-  const bodies: Record<string, unknown>[] = [];
-  globalThis.fetch = (async (_url: string, init: { body: string }) => {
-    const b = JSON.parse(init.body);
-    bodies.push(b);
-    const json = b.query
-      ? { data: { viewer: { id: "v1" } } }
-      : { errors: [{ message: "PersistedQueryNotFound" }] };
-    return new Response(JSON.stringify(json), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
+  freshSession();
+  const bodies = mockGraphQL((b) =>
+    b.query ? { data: { viewer: { id: "v1" } } } : { errors: [{ message: "PersistedQueryNotFound" }] },
+  );
 
   assert.deepEqual(await getBudgets(), { viewer: { id: "v1" } });
   assert.equal(bodies.length, 2);
@@ -137,36 +115,23 @@ test("a rotated persisted hash falls back to the bundled query text", async () =
 });
 
 test("RM calls run in parallel, at most 4 in flight", async () => {
-  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-conc-"));
-  seedSession("tb.auth0.sid=test");
+  freshSession();
   let inFlight = 0;
   let peak = 0;
-  globalThis.fetch = (async () => {
+  mockGraphQL(async () => {
     peak = Math.max(peak, ++inFlight);
     await new Promise((r) => setTimeout(r, 20));
     inFlight--;
-    return new Response(JSON.stringify({ data: { viewer: { id: "v" } } }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }) as typeof fetch;
+    return { data: { viewer: { id: "v" } } };
+  });
   await Promise.all(Array.from({ length: 10 }, () => getBudgets()));
   assert.equal(peak, 4);
   assert.equal(inFlight, 0);
 });
 
 test("a non-transaction id is refused with a clear reason and never sent to Rocket Money", async () => {
-  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-ids-"));
-  seedSession("tb.auth0.sid=test");
-  const sent: Record<string, unknown>[] = [];
-  globalThis.fetch = (async (_url: string, init: { body: string }) => {
-    const b = JSON.parse(init.body);
-    sent.push(b);
-    return new Response(
-      JSON.stringify({ data: { a0: null }, errors: [{ message: "An error occurred.", path: ["a0"] }] }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-  }) as typeof fetch;
+  freshSession();
+  const sent = mockGraphQL(() => ({ data: { a0: null }, errors: [{ message: "An error occurred.", path: ["a0"] }] }));
   const real = "VHJhbnNhY3Rpb246MTEyODExODAzNzkz"; // Transaction:112811803793
   const out = await setTransactionsNote([
     { nodeId: "bogus", note: "x" },

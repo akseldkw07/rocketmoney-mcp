@@ -1,5 +1,6 @@
-import { rmFullText, toRMTransaction, TRANSACTION_FIELDS } from "./client.js";
+import { collectPages, rmFullText, toRMTransaction, TRANSACTION_FIELDS } from "./client.js";
 import { addDaysYmd, ymd } from "./windows.js";
+import { toCents } from "./format.js";
 // Transaction rules (Settings -> Transaction Rules, or "Edit Rule" on a
 // transaction). Every operation here sends its own query text rather than a
 // persisted hash, so a hash rotation can't break them. Operation names, input
@@ -100,7 +101,6 @@ const DESTROY_RULE = `mutation DestroyTransactionRule($input: DestroyTransaction
     __typename
   }
 }`;
-const toCents = (usd) => Math.round(usd * 100);
 const fromCents = (v) => (typeof v === "number" ? v / 100 : null);
 const dateToIso = (ymd) => `${ymd}T00:00:00.000Z`;
 const isoToDate = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
@@ -324,17 +324,14 @@ export function withFutureFloor(c, now = new Date()) {
 }
 // ── API calls ──────────────────────────────────────────────────────
 export async function listRules() {
-    const rules = [];
-    let cursor = null;
-    for (let page = 0; page < 20; page++) {
+    const rules = await collectPages(async (cursor) => {
         const data = await rmFullText("TransactionRulesPage", RULES_PAGE, { first: 100, cursor });
         const conn = data.viewer?.transactionRules;
-        for (const e of conn?.edges ?? [])
-            rules.push(parseRule(e.node));
-        if (!conn?.pageInfo?.hasNextPage || !conn.pageInfo.endCursor)
-            break;
-        cursor = conn.pageInfo.endCursor;
-    }
+        return {
+            items: (conn?.edges ?? []).map((e) => parseRule(e.node)),
+            next: conn?.pageInfo?.hasNextPage ? (conn.pageInfo.endCursor ?? null) : null,
+        };
+    });
     liveIdCache = { at: Date.now(), ids: new Set(rules.map((r) => r.id)) };
     return rules;
 }

@@ -160,7 +160,7 @@ export async function budgetSnapshot(req, res) {
         recurring: () => rm.getRecurring().then((d) => fmt.shapeRecurring(d, { activeOnly: true })),
         upcoming: () => rm.getUpcoming(28).then(fmt.shapeUpcoming),
         spending: () => rm.getSpending().then(fmt.shapeSpending),
-        assets: () => rm.getAssets().then((xs) => xs.map((a) => ({ name: a.name, value: Math.round(a.valueCents) / 100, type: a.assetType }))),
+        assets: () => rm.getAssets().then((xs) => xs.map((a) => ({ name: a.name, value: fmt.usd(a.valueCents), type: a.assetType }))),
     };
     const body = { ok: true, as_of: new Date().toISOString() };
     const errors = {};

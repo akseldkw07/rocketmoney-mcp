@@ -375,8 +375,10 @@ export function buildServer() {
         },
         annotations: WRITE,
     }, tool(async ({ transaction_id, note }) => {
-        const saved = await rm.setTransactionNote(transaction_id, note);
-        return { transaction_id, note: saved, ok: true };
+        const [r] = await rm.setTransactionsNote([{ nodeId: transaction_id, note }]);
+        if (r.error)
+            throw new Error(r.error);
+        return { transaction_id, note: r.note, ok: true };
     }));
     server.registerTool("set_transaction_notes", {
         title: "Set notes on many transactions",
@@ -482,7 +484,7 @@ export function buildServer() {
             name: args.name,
             // Dollars in, cents on the wire. Every Rocket Money money field is
             // integer cents, including this one, whose name does not say so.
-            amountCents: args.amount === undefined ? undefined : Math.round(args.amount * 100),
+            amountCents: args.amount === undefined ? undefined : fmt.toCents(args.amount),
             frequency: args.frequency,
             nextExpectedDate: args.next_expected_date,
             startDate: args.start_date,
@@ -542,7 +544,7 @@ export function buildServer() {
         },
         annotations: WRITE,
     }, tool(async ({ asset_id, value }) => {
-        const updated = await rm.updateAssetValue(asset_id, Math.round(value * 100));
+        const updated = await rm.updateAssetValue(asset_id, fmt.toCents(value));
         return {
             id: updated.assetId,
             name: updated.name,

@@ -226,3 +226,28 @@ probes on 2026-10-29.
 
 Suggested order: B1-B3 (bugs), D (dead code), A1 + A5 (cheap, large wins), C1-C8,
 then A2-A4 (need the rotation investigation and more care), then E.
+
+## Second sweep (2026-10-29, after PR #7)
+
+- [x] **F1. Dollars to cents in three places.** `Math.round(x * 100)` in mcp.ts
+      (`update_subscription`, `set_asset_value`) and `toCents` in rules.ts; `/api/budget`
+      hand-rolls cents to dollars instead of `usd()`. *Fix:* `toCents()` beside `usd()` in
+      format.ts, used everywhere.
+- [x] **F2. Two cursor-paging loops.** `searchAllTransactions` and `listRules` each walk
+      pages by hand (and `listRules` caps at 20 pages). *Fix:* one `collectPages()` helper.
+- [x] **F3. Two note-writing paths.** `setTransactionNote` (one id, its own mutation text)
+      and `setTransactionsNote` (batched). *Fix:* `set_transaction_note` uses the batch
+      path; delete the single-id function.
+- [x] **F4. Test fetch mocks repeated 11 times** across three test files, each rebuilding
+      the `Response` and seeding a session by hand. *Fix:* `test/helpers.ts` with
+      `mockGraphQL(handler)` and `freshSession()`.
+- [ ] **F5. `client.ts` is 1,329 lines of five concerns:** transport (headers, executor,
+      concurrency, re-login, errors, batching), persisted reads, subscriptions,
+      transactions and categories. *Fix:* split into `graphql.ts`, `transactions.ts` and
+      `categories.ts`, with `client.ts` keeping the persisted reads, subscriptions and
+      assets and re-exporting the rest, so `import * as rm from "./rm/client.js"` keeps
+      working.
+- [ ] **F6. `mcp.ts` is 1,026 lines, one function registering 33 tools.** *Fix:* one file
+      per domain under `src/tools/` (accounts and reads, transactions, categories, rules,
+      subscriptions and assets), plus shared helpers (`tool()`, annotations, batch
+      results); `buildServer()` calls each register function.
