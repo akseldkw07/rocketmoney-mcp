@@ -1,4 +1,5 @@
-// Helpers every tool file shares: the result wrapper, annotations, batch results.
+// Helpers every tool file shares: the result wrapper, annotations, batch results
+// (the last two from mcp-utils).
 
 import { z } from "zod";
 import { RMAuthError } from "../rm/client.js";
@@ -26,24 +27,8 @@ export function tool<T>(fn: (args: T) => Promise<unknown>) {
   };
 }
 
-export const READ = { readOnlyHint: true, openWorldHint: true } as const;
-
-export const WRITE = { readOnlyHint: false, openWorldHint: true } as const;
-export const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: true } as const;
-
-/**
- * The result every batch write returns: how many of the requested items
- * Rocket Money reports updated, plus per-item results when it gives them.
- * `ok` means all of them - compare counts rather than trusting a bare success.
- */
-export function batchOutcome(requested: number, updated: number, extra: Record<string, unknown> = {}) {
-  return { requested, updatedCount: updated, ...extra, ok: updated === requested };
-}
-
-/** batchOutcome for per-item results, where an item with an `error` failed. */
-export function perItemOutcome<R extends { error?: string }>(results: R[], extra: Record<string, unknown> = {}) {
-  return batchOutcome(results.length, results.filter((r) => !r.error).length, { ...extra, results });
-}
+// Annotation presets and batch results are shared with the other MCP servers.
+export { DESTRUCTIVE, READ, WRITE, batchOutcome, perItemOutcome } from "mcp-utils";
 
 export const YMD = /^\d{4}-\d{2}-\d{2}$/;
 

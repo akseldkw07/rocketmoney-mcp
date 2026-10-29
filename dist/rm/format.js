@@ -197,17 +197,22 @@ export function shapeNetWorth(data) {
         trend: history.slice(0, 30),
     };
 }
+/**
+ * viewer.spendingByCategories (SpendingPage and Budgets both return it) as rows,
+ * largest amount first. `row` adds the fields each view wants from the category.
+ */
+function categoryRows(viewer, row) {
+    return asArr(viewer.spendingByCategories)
+        .map((x) => {
+        const p = asObj(x);
+        return row(asObj(p.transactionCategory), usd(p.amount));
+    })
+        .sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
+}
 // ── spending (SpendingPage) ────────────────────────────────────────
 export function shapeSpending(data) {
     const v = asObj(data.viewer);
-    const byCategory = asArr(v.spendingByCategories)
-        .map((x) => {
-        const p = asObj(x);
-        const cat = asObj(p.transactionCategory);
-        return { category: cat.label, kind: cat.type, amount: usd(p.amount) };
-    })
-        .filter((c) => c.amount !== null)
-        .sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
+    const byCategory = categoryRows(v, (cat, amount) => ({ category: cat.label, kind: cat.type, amount })).filter((c) => c.amount !== null);
     return {
         currentSpent: usd(v.currentSpent),
         previousSpent: usd(v.previousSpent),
@@ -221,17 +226,11 @@ export function shapeSpending(data) {
 // ── budgets (Budgets) ──────────────────────────────────────────────
 export function shapeBudgets(data) {
     const v = asObj(data.viewer);
-    const byCategory = asArr(v.spendingByCategories)
-        .map((x) => {
-        const p = asObj(x);
-        const cat = asObj(p.transactionCategory);
-        return {
-            category: cat.label,
-            amount: usd(p.amount),
-            lastThreeMonths: asArr(cat.budgetsLastThreeMonthsAmountSpent).map(usd),
-        };
-    })
-        .sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
+    const byCategory = categoryRows(v, (cat, amount) => ({
+        category: cat.label,
+        amount,
+        lastThreeMonths: asArr(cat.budgetsLastThreeMonthsAmountSpent).map(usd),
+    }));
     return {
         earnings: usd(v.earnings),
         earningsLastMonth: usd(v.earningsLastMonth),
