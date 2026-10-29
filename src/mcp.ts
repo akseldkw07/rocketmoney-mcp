@@ -3,6 +3,7 @@ import { z } from "zod";
 import { RMAuthError } from "./rm/client.js";
 import * as rm from "./rm/client.js";
 import * as fmt from "./rm/format.js";
+import * as rules from "./rm/rules.js";
 import { sessionStatus } from "./rm/session.js";
 
 const AUTH_HINT =
@@ -50,16 +51,119 @@ async function accountLabels(): Promise<Map<string, string>> {
   return map;
 }
 
+/**
+ * accountLabels for decorating rows, degrading to raw account ids when the
+ * account list can't be read (e.g. its persisted hash rotated) instead of
+ * failing a call whose real data loaded fine.
+ */
+async function accountLabelsOrIds(): Promise<{ labels: Map<string, string>; warning?: string }> {
+  try {
+    return { labels: await accountLabels() };
+  } catch (err) {
+    if (err instanceof RMAuthError) throw err;
+    return {
+      labels: new Map(),
+      warning: `Account names unavailable, so rows show account ids (${err instanceof Error ? err.message : err}).`,
+    };
+  }
+}
+
+// ── Transaction rules: shared input schemas and output shapes ───────
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+const ruleConditionsSchema = z
+  .object({
+    name_contains: z.string().nullable().optional().describe("Transaction name contains this text (case-insensitive)"),
+    name_equals: z.string().nullable().optional().describe("Transaction name is exactly this. Use instead of name_contains, not with it"),
+    amount: z.number().nonnegative().nullable().optional().describe("Amount equals this, in USD (compared as an absolute value unless amount_type is set)"),
+    amount_min: z.number().nonnegative().nullable().optional().describe("Amount at least this, in USD. Alone (no amount_max) it means strictly greater than"),
+    amount_max: z.number().nonnegative().nullable().optional().describe("Amount at most this, in USD. Alone (no amount_min) it means strictly less than"),
+    amount_type: z
+      .enum(["any", "debit", "credit"])
+      .nullable()
+      .optional()
+      .describe("debit = money out (charges), credit = money in. Default any. Needs an amount condition"),
+    account_ids: z.array(z.string()).nullable().optional().describe("Only transactions on any of these accounts (account node ids from list_accounts)"),
+    date_from: z.string().regex(YMD).nullable().optional().describe("Posted on/after this date, YYYY-MM-DD"),
+    date_to: z.string().regex(YMD).nullable().optional().describe("Posted on/before this date, YYYY-MM-DD"),
+    merchant_id: z.string().nullable().optional().describe("Rocket Money merchant (service) id, as list_rules shows for merchant-based rules"),
+  })
+  .describe("Match conditions; every condition given must hold (AND)");
+
+const ruleUpdatesSchema = z
+  .object({
+    category: z.string().nullable().optional().describe("Set the category: a label like 'Groceries', a numeric id, or a category node id (see list_categories)"),
+    rename: z.string().nullable().optional().describe("Rename matching transactions to this display name"),
+    ignore: z
+      .enum(["none", "budget", "everything"])
+      .nullable()
+      .optional()
+      .describe("Ignore matches from the budget only, or from everything (all spending/charts); none = don't ignore"),
+    tax_deductible: z.boolean().nullable().optional().describe("Mark matches tax deductible (true only; false/null means no change)"),
+  })
+  .describe("What the rule does to matching transactions");
+
+type ConditionsArg = z.infer<typeof ruleConditionsSchema>;
+type UpdatesArg = z.infer<typeof ruleUpdatesSchema>;
+
+/** Tool-level updates -> rules.ts updates, resolving the category the way set_transaction_category does. */
+async function resolveRuleUpdates(u: UpdatesArg | undefined): Promise<rules.RuleUpdates | undefined> {
+  if (!u) return undefined;
+  const { category, ...rest } = u;
+  const out: rules.RuleUpdates = { ...rest };
+  if (category === null) out.category_id = null;
+  else if (category !== undefined) out.category_id = await rm.resolveCategoryNodeId(category);
+  return out;
+}
+
+function shapeRule(r: rules.RMRule) {
+  return {
+    id: r.id,
+    matchedCount: r.matchedCount,
+    conditions: r.conditions,
+    accounts: r.accounts,
+    merchant: r.merchant,
+    updates: {
+      category: r.updates.category_label ?? null,
+      categoryId: r.updates.category_id ?? null,
+      rename: r.updates.rename ?? null,
+      ignore: r.updates.ignore ?? null,
+      taxDeductible: r.updates.tax_deductible ?? false,
+      subscription: r.updates.subscription_name ?? null,
+    },
+    summary: r.updateTitles,
+  };
+}
+
+async function shapeMatches(sample: rules.RuleMatch[]) {
+  const { labels, warning } = sample.length ? await accountLabelsOrIds() : { labels: new Map<string, string>() };
+  return {
+    ...(warning ? { warning } : {}),
+    transactions: sample.map((t) => ({
+      id: t.id,
+      date: t.date,
+      amount: fmt.usd(t.amountCents),
+      name: t.name,
+      category: t.categoryLabel,
+      account: t.accountId ? (labels.get(t.accountId) ?? t.accountId) : null,
+    })),
+  };
+}
+
+const RULE_LIMITS =
+  "Not supported by Rocket Money's rule API: tags, OR between conditions, more than one name condition, name regex/starts-with, and matching on category.";
+
 /** Build a fresh McpServer with the Rocket Money tools registered (writes omitted under READ_ONLY). */
 export function buildServer(): McpServer {
   const server = new McpServer(
     { name: "rocketmoney", version: "1.0.0" },
     {
       instructions:
-        "Access to the user's Rocket Money finances (USD). Read tools: accounts and balances, transactions, spending by category, budgets, net worth, recurring charges (subscriptions, get_subscription), and the category catalog (list_categories). " +
+        "Access to the user's Rocket Money finances (USD). Read tools: accounts and balances, transactions, spending by category, budgets, net worth, recurring charges (subscriptions, get_subscription), the category catalog (list_categories), and transaction rules (list_rules, get_rule, preview_rule)." +
         (READ_ONLY
           ? "This server runs in read-only mode: the write tools are not registered, so nothing here can change the account."
-          : "Write tools MUTATE the account: set_transaction_note sets/clears a transaction's note; set_transaction_category recategorizes a transaction (optionally every related transaction from the same merchant); update_subscription corrects a recurring charge's name, amount, cadence or dates; delete_subscription removes one from the list. To recategorize, first call list_categories to see valid labels/ids, then pass a label like \"Groceries\" (or a category id) to set_transaction_category. Marking a subscription cancelled is not possible: Rocket Money's API has no such field for a subscription it detected from transactions.") +
+          : "Write tools MUTATE the account: set_transaction_note sets/clears a transaction's note; set_transaction_category recategorizes a transaction (optionally every related transaction from the same merchant); update_subscription corrects a recurring charge's name, amount, cadence or dates; delete_subscription removes one from the list; create_rule/update_rule/delete_rule manage transaction rules (run preview_rule first; by default a rule is applied to every existing match too; apply_to_existing=false limits it to future transactions).To recategorize, first call list_categories to see valid labels/ids, then pass a label like \"Groceries\" (or a category id) to set_transaction_category. Marking a subscription cancelled is not possible: Rocket Money's API has no such field for a subscription it detected from transactions.") +
         " If a tool reports the session is inactive, the user must re-authenticate at the auth page.",
     },
   );
@@ -265,9 +369,10 @@ export function buildServer(): McpServer {
     },
     tool(async ({ query, since, account_ids }: { query?: string; since?: string; account_ids?: string[] }) => {
       const txns = await rm.searchTransactions(query ?? null, since ?? null, 6, account_ids ?? []);
-      const labels = txns.length ? await accountLabels() : new Map<string, string>();
+      const { labels, warning } = txns.length ? await accountLabelsOrIds() : { labels: new Map<string, string>() };
       return {
         count: txns.length,
+        ...(warning ? { warning } : {}),
         transactions: txns.map((t) => ({
           id: t.nodeId,
           date: t.date,
@@ -296,9 +401,14 @@ export function buildServer(): McpServer {
       const data = await rm.getCategoryTransactions(category_id);
       const nodes: Record<string, unknown>[] = [];
       rm.collectByType(data, "Transaction", nodes);
+      // The 2026-10-27 query references each transaction twice (once with only
+      // id/amount/date), so merge by id rather than listing both copies.
+      const byId = new Map<unknown, Record<string, unknown>>();
+      for (const o of nodes) byId.set(o.id, { ...o, ...byId.get(o.id) });
+      const txns = [...byId.values()];
       return {
-        count: nodes.length,
-        transactions: nodes.map((o) => ({
+        count: txns.length,
+        transactions: txns.map((o) => ({
           id: o.id,
           date: o.date,
           amount: fmt.usd(o.amount),
@@ -331,6 +441,59 @@ export function buildServer(): McpServer {
           includeInSpending: c.includeInSpending,
         })),
       };
+    }),
+  );
+
+  server.registerTool(
+    "list_rules",
+    {
+      title: "List transaction rules",
+      description:
+        "Every transaction rule (Rocket Money's 'Edit Rule'): its id, match conditions, the updates it applies (category, rename, ignore, tax deductible), and how many transactions it currently matches. Amounts in USD; dates YYYY-MM-DD.",
+      inputSchema: {},
+      annotations: READ,
+    },
+    tool(async () => {
+      const all = await rules.listRules();
+      return { count: all.length, rules: all.map(shapeRule) };
+    }),
+  );
+
+  server.registerTool(
+    "get_rule",
+    {
+      title: "Get transaction rule",
+      description:
+        "One transaction rule in full plus a sample of the transactions it matches (newest first, with transaction ids). Pass the rule id from list_rules.",
+      inputSchema: {
+        rule_id: z.string().describe("The rule id (the `id` from list_rules)"),
+        sample_size: z.number().int().min(1).max(100).optional().describe("Matched transactions to return (default 20)"),
+      },
+      annotations: READ,
+    },
+    tool(async ({ rule_id, sample_size }: { rule_id: string; sample_size?: number }) => {
+      const rule = await rules.getRule(rule_id);
+      const { count, sample } = await rules.previewMatches(rule.matchRulesInput, sample_size ?? 20);
+      return { ...shapeRule(rule), matchedNow: count, sample: await shapeMatches(sample) };
+    }),
+  );
+
+  server.registerTool(
+    "preview_rule",
+    {
+      title: "Preview a transaction rule",
+      description:
+        "Dry run: how many existing transactions a set of match conditions would match, plus a sample (newest first, with ids). Saves nothing. Use it before create_rule/update_rule. " +
+        RULE_LIMITS,
+      inputSchema: {
+        conditions: ruleConditionsSchema,
+        sample_size: z.number().int().min(1).max(100).optional().describe("Matched transactions to return (default 20)"),
+      },
+      annotations: READ,
+    },
+    tool(async ({ conditions, sample_size }: { conditions: ConditionsArg; sample_size?: number }) => {
+      const { count, sample } = await rules.previewMatches(rules.conditionsToInput(conditions), sample_size ?? 20);
+      return { matchedCount: count, sample: await shapeMatches(sample) };
     }),
   );
 
@@ -565,6 +728,121 @@ export function buildServer(): McpServer {
         includeInNetWorth: updated.includeInNetWorth,
         ok: true,
       };
+    }),
+  );
+
+  const APPLY_TO_EXISTING =
+    "Rocket Money has no 'future transactions only' switch: saving a rule always applies it to every transaction it matches at that moment. " +
+    "So with apply_to_existing=false the rule gets a date_from of tomorrow, so it matches nothing that has already posted, and the save is refused if a preview still finds a match. " +
+    "With apply_to_existing=true (the default) there is no floor, and the response's existingTransactionsUpdated is how many transactions Rocket Money applied the updates to.";
+
+  server.registerTool(
+    "create_rule",
+    {
+      title: "Create a transaction rule",
+      description:
+        "WRITES to Rocket Money: create a transaction rule that applies `updates` to transactions matching `conditions`. Run preview_rule first. " +
+        APPLY_TO_EXISTING +
+        " `updates.category` is validated against list_categories. " +
+        RULE_LIMITS,
+      inputSchema: {
+        conditions: ruleConditionsSchema,
+        updates: ruleUpdatesSchema,
+        apply_to_existing: z
+          .boolean()
+          .optional()
+          .describe("Also update transactions that already match (default true; false = only transactions that post from tomorrow on)"),
+      },
+      annotations: WRITE,
+    },
+    tool(
+      async ({
+        conditions,
+        updates,
+        apply_to_existing,
+      }: {
+        conditions: ConditionsArg;
+        updates: UpdatesArg;
+        apply_to_existing?: boolean;
+      }) => {
+        const r = await rules.createRule(conditions, (await resolveRuleUpdates(updates))!, apply_to_existing ?? true);
+        return {
+          rule: r.rule ? shapeRule(r.rule) : null,
+          existingTransactionsUpdated: r.existingTransactionsUpdated,
+          dateFloorAdded: r.dateFloorAdded,
+          ok: true,
+        };
+      },
+    ),
+  );
+
+  server.registerTool(
+    "update_rule",
+    {
+      title: "Update a transaction rule",
+      description:
+        "WRITES to Rocket Money: change a rule's conditions and/or updates. Rocket Money saves the change as a replacement rule with a NEW id; the response's rule.id is the one to use afterwards. Only the fields you pass change; pass null to clear one (setting name_contains clears name_equals and vice versa; likewise amount vs amount_min/amount_max). " +
+        "Saving re-applies the rule to everything it matches, so with apply_to_existing=false a rule that already matches any transaction is refused rather than saved. To change such a rule without touching past transactions, delete_rule (keeping its changes) and create_rule a replacement. " +
+        APPLY_TO_EXISTING +
+        " " +
+        RULE_LIMITS,
+      inputSchema: {
+        rule_id: z.string().describe("The rule id (the `id` from list_rules)"),
+        conditions: ruleConditionsSchema.optional(),
+        updates: ruleUpdatesSchema.optional(),
+        apply_to_existing: z
+          .boolean()
+          .optional()
+          .describe("Also update transactions that already match (default true)"),
+      },
+      annotations: WRITE,
+    },
+    tool(
+      async ({
+        rule_id,
+        conditions,
+        updates,
+        apply_to_existing,
+      }: {
+        rule_id: string;
+        conditions?: ConditionsArg;
+        updates?: UpdatesArg;
+        apply_to_existing?: boolean;
+      }) => {
+        const r = await rules.updateRule(
+          rule_id,
+          conditions,
+          await resolveRuleUpdates(updates),
+          apply_to_existing ?? true,
+        );
+        return {
+          rule: r.rule ? shapeRule(r.rule) : null,
+          existingTransactionsUpdated: r.existingTransactionsUpdated,
+          dateFloorAdded: r.dateFloorAdded,
+          ok: true,
+        };
+      },
+    ),
+  );
+
+  server.registerTool(
+    "delete_rule",
+    {
+      title: "Delete a transaction rule",
+      description:
+        "WRITES to Rocket Money: delete a transaction rule so it stops applying to future transactions. By default the changes it already made stay in place; undo_changes=true also reverts them on every transaction it matched (the web app's 'Undo Changes').",
+      inputSchema: {
+        rule_id: z.string().describe("The rule id (the `id` from list_rules)"),
+        undo_changes: z
+          .boolean()
+          .optional()
+          .describe("Also revert what the rule changed on past transactions (default false)"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } as const,
+    },
+    tool(async ({ rule_id, undo_changes }: { rule_id: string; undo_changes?: boolean }) => {
+      const r = await rules.deleteRule(rule_id, undo_changes ?? false);
+      return { deleted: shapeRule(r.deleted), transactionsReverted: r.transactionsReverted, ok: true };
     }),
   );
 

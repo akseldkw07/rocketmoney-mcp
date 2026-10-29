@@ -40,6 +40,9 @@ cookie anywhere until you enter your own server's URL.
 | `search_transactions` | Transactions by merchant text and/or date (incl. current note + category) |
 | `category_transactions` | This month's transactions within one category |
 | `list_categories` | The full category catalog (default + custom) with labels + node ids |
+| `list_rules` | Every transaction rule: conditions, updates, matched count |
+| `get_rule` | One rule plus a sample of the transactions it matches (with ids) |
+| `preview_rule` | Dry run: match count and sample for a set of conditions, saves nothing |
 
 ### Write (absent under `ROCKETMONEY_READ_ONLY=1`)
 
@@ -52,10 +55,29 @@ cookie anywhere until you enter your own server's URL.
 | `update_subscription` | Correct a recurring charge's name, amount, cadence or dates |
 | `mark_subscription_active` | Tell Rocket Money a subscription it wrote off is still being charged |
 | `delete_subscription` | Remove a recurring charge from the list (not a cancellation) |
+| `create_rule` | Create a transaction rule (category, rename, ignore, tax deductible) |
+| `update_rule` | Change a rule's conditions or updates (Rocket Money gives it a new id) |
+| `delete_rule` | Delete a rule, keeping (default) or undoing its past changes |
 
 All amounts are in USD. To recategorize, call `list_categories` first to see valid
 labels, then pass e.g. `category: "Groceries"` to `set_transaction_category` - the
 server resolves the label to the right node id.
+
+### Transaction rules
+
+A rule matches on name (contains or exactly), amount (exact, range, or one-sided;
+any/debit/credit), any of a set of accounts, and a posted-date range. All conditions
+must hold. It can set the category, rename, ignore (from budget or everything) and
+mark tax deductible. Rocket Money's rule API has no tags, no OR, and no category
+condition.
+
+Rocket Money has no "future transactions only" switch: saving a rule applies it to
+every transaction it matches at that moment. `create_rule`/`update_rule` default to
+`apply_to_existing=true`, matching the web app, and the response reports how many
+existing transactions were updated. `apply_to_existing=false` instead adds
+`date_from` = tomorrow and refuses to save if a preview still finds a match;
+`update_rule` with `false` refuses a rule that already matches anything, since saving
+would re-apply it.
 
 ### What you can and cannot change about a subscription
 
@@ -194,12 +216,15 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
 
 ## Notes
 
-- If a tool returns `PersistedQueryNotFound`, Rocket Money rotated a GraphQL query
-  hash. This happens every few weeks, because a hash is tied to one build of RM's
-  web bundle. The error names the page to re-capture from: open it with devtools
-  recording, find the `client-api.rocketmoney.com/graphql` POST whose
-  `operationName` matches, copy `extensions.persistedQuery.sha256Hash`, and update
-  `PERSISTED` in `src/rm/client.ts`.
+- Rocket Money rotates GraphQL query hashes every few weeks, because a hash is tied
+  to one build of its web bundle. A rotated hash no longer breaks a tool: the read
+  is resent with the query text in `src/rm/query-text.ts` and the server logs
+  `PersistedQueryNotFound ... Falling back`. To fix the hash properly, open the page
+  the log line names with devtools recording, export a HAR, and run
+  `npm run refresh-hashes -- <file.har>`, which rewrites `PERSISTED` in
+  `src/rm/client.ts`. `npm run refresh-hashes -- --bundle` regenerates the fallback
+  query text from the public bundle (no login needed). Transaction-rule tools and all
+  writes send their own query text, so they never depend on a hash.
 - Not affiliated with or endorsed by Rocket Money / Rocket Companies.
 
 ## Known shortcomings
@@ -212,8 +237,9 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   fallback.
 - **Chrome extension is orphaned.** `extension/` still pushes to `/auth/ingest`, which
   this build no longer registers. Paste at `/auth` or rely on auto-login instead.
-- **Query hashes rotate.** Reads use persisted-query hashes that Rocket Money
-  invalidates every few weeks; re-capturing them is manual (see Notes).
+- **Query hashes rotate.** Reads fall back to bundled query text, which keeps working
+  until Rocket Money changes the schema itself; refreshing the hashes is a HAR capture
+  plus `npm run refresh-hashes` (see Notes).
 - **Subscriptions can't be marked cancelled** through the API (see above), only deleted.
 - **Logs have no timestamps**; `login-last.json` is the only timestamped record of a
   login run.
@@ -222,19 +248,19 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
 
 ## TODO
 
-- [ ] Decide on `feat/generic-transaction-writes`: it has a gate-note write endpoint
-      (with a test) and a fix for the 2026-10-27 query-hash rotation that are not in
-      `main`, and it conflicts with the current `client.ts` / `index.ts`.
-- [ ] Clean up the 7 `dependabot/npm_and_yarn/*` branches copied from upstream
-      (`312-dev/rocketmoney-mcp`): delete them, or apply the bumps (notably MCP SDK
-      1.32.0) in a PR, and consider turning Dependabot on for this fork.
+- [ ] Decide on `feat/generic-transaction-writes`: its 2026-10-27 hash fix is now in
+      `main`; its gate-note write endpoint (with a test) is not, and it conflicts with
+      the current `client.ts` / `index.ts`.
+- [ ] Apply the dependency bumps upstream's Dependabot proposed (notably MCP SDK
+      1.32.0; the copied branches were deleted from this fork), and consider turning
+      Dependabot on for this fork.
 - [ ] Remove `extension/`, or bring back `/auth/ingest` behind authentication.
 - [ ] Timestamp the server log.
 - [ ] Add CI for `npm test` and `npm run typecheck`.
 - [ ] Treat timeouts and connection resets that come from local network trouble as
       offline, without hiding real Rocket Money failures.
-- [ ] Re-capture persisted-query hashes automatically (e.g. from a headless page load)
-      instead of by hand.
+- [ ] Capture the HAR for `npm run refresh-hashes` automatically (e.g. from a
+      headless page load) instead of by hand.
 
 ## License
 

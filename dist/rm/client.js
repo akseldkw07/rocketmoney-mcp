@@ -1,6 +1,7 @@
 import { applySetCookies, loadSession, markSessionDead, parseCookieHeader, saveSession, serializeJar, } from "./session.js";
 import { monthWindows, ymd, addDays } from "./windows.js";
 import { attemptLogin, autoLoginConfigured } from "./login.js"; // circular; runtime-only use
+import { QUERY_TEXT } from "./query-text.js";
 const GRAPHQL_URL = "https://client-api.rocketmoney.com/graphql";
 // Captured from the web app. The exact value doesn't gate persisted-query
 // resolution (hashes survive client-version bumps) but RM expects the header.
@@ -24,7 +25,14 @@ const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 // __typename. Re-derived that way 2026-10-27 for AccountDetailAccountListPage,
 // AccountDetailPage, SpendingPage, Budgets, RecurringPage and
 // TransactionCategoryPage; the same computation reproduced every hash left
-// unchanged, which is what showed it matches the client.
+// unchanged, which is what showed it matches the client. (Rerun against the
+// 2026-10-29 bundle, it reproduced only two of six changed hashes, so treat a
+// computed hash as a guess until a request with it succeeds.)
+//
+// To update from a capture: `npm run refresh-hashes -- <file.har>` rewrites the
+// entries below from every operationName -> sha256Hash pair in the HAR. A stale
+// hash no longer breaks a tool in the meantime: rmGraphQL falls back to the
+// query text in QUERY_TEXT (`npm run refresh-hashes -- --bundle` regenerates it).
 const PERSISTED = {
     AuthenticationCheck: "5fe578b1917c4601cb63948f580ad3bdadded0fefa985fdd2fe2d1b913cce2d0",
     RefreshAuthToken: "a86bd0f5e3fbc3673d1215b894362c5cd28ce060a7bb326cc9fd37b06bdd9fbb",
@@ -58,6 +66,9 @@ const CAPTURE_PAGE = {
 };
 /** Thrown when the session is no longer authenticated (cookie expired/revoked). */
 export class RMAuthError extends Error {
+}
+/** Thrown when RM no longer recognizes a persisted-query hash. */
+export class PersistedQueryNotFoundError extends Error {
 }
 // Relay global IDs are base64 of `Type:numericId`. RM already returns opaque
 // base64 `id` fields on nodes, so we only need to BUILD ids when the caller
@@ -182,10 +193,9 @@ async function rmExecuteUnlocked(opName, payload) {
         if (json.errors.some((e) => /PersistedQueryNotFound/i.test(e.message))) {
             const page = CAPTURE_PAGE[opName] ??
                 "the Rocket Money web app page that shows this data";
-            throw new Error(`RM ${opName}: PersistedQueryNotFound - Rocket Money rotated this query hash. ` +
-                `To re-capture: with devtools recording, load ${page}, find the POST to ` +
-                `client-api.rocketmoney.com/graphql whose operationName is ${opName}, copy ` +
-                `extensions.persistedQuery.sha256Hash, and update PERSISTED in client.ts.`);
+            throw new PersistedQueryNotFoundError(`RM ${opName}: PersistedQueryNotFound - Rocket Money rotated this query hash. ` +
+                `To fix: load ${page} with devtools recording, export a HAR, and run ` +
+                `\`npm run refresh-hashes -- <file.har>\` (it rewrites PERSISTED in src/rm/client.ts).`);
         }
         throw new Error(`RM ${opName}: ${json.errors.map((e) => e.message).join("; ")}`);
     }
@@ -239,19 +249,41 @@ export async function probeSession(cookieHeader) {
         return null;
     }
 }
-/** Persisted-query READ (hash captured from a HAR; may rotate server-side). */
+// Ops already warned about, so a rotated hash logs once per process, not per call.
+const fellBack = new Set();
+/**
+ * Persisted-query READ (hash captured from a HAR; may rotate server-side). When
+ * RM no longer knows the hash, resend with the query text from the web bundle -
+ * what the web client itself does on PersistedQueryNotFound - so a rotation
+ * degrades to a log line instead of a broken tool.
+ */
 async function rmGraphQL(body) {
-    return rmExecute(body.operationName, {
-        operationName: body.operationName,
-        variables: body.variables ?? {},
-        extensions: { persistedQuery: { version: 1, sha256Hash: PERSISTED[body.operationName] } },
-    });
+    const op = body.operationName;
+    const variables = body.variables ?? {};
+    try {
+        return await rmExecute(op, {
+            operationName: op,
+            variables,
+            extensions: { persistedQuery: { version: 1, sha256Hash: PERSISTED[op] } },
+        });
+    }
+    catch (err) {
+        const text = QUERY_TEXT[op];
+        if (!(err instanceof PersistedQueryNotFoundError) || !text)
+            throw err;
+        if (!fellBack.has(op)) {
+            fellBack.add(op);
+            console.warn(`[rm] ${err.message} Falling back to the bundled query text.`);
+        }
+        return rmExecute(op, { operationName: op, variables, query: text });
+    }
 }
 /**
- * Full-text WRITE mutation. Sends the whole query string rather than a persisted
- * hash on purpose, so RM rotating a read hash can never break the write path.
+ * Full-text operation: sends the whole query string rather than a persisted
+ * hash, so RM rotating a read hash can never break it. Every write uses this,
+ * as do the transaction-rule reads.
  */
-async function rmMutation(operationName, query, variables) {
+export async function rmFullText(operationName, query, variables) {
     return rmExecute(operationName, { operationName, query, variables });
 }
 // ── Generic helpers ────────────────────────────────────────────────
@@ -381,7 +413,7 @@ export async function getAssets() {
  */
 export async function updateAssetValue(assetNodeId, valueCents) {
     const today = ymd(new Date());
-    const data = await rmMutation("CreateAssetValue", "mutation CreateAssetValue($input: CreateAssetValueInput!) {\n  createAssetValue(input: $input) {\n    asset {\n      id\n      name\n      type\n      includeInNetWorth\n      valueCents\n      __typename\n    }\n    __typename\n  }\n}", { input: { assetNodeId, valueCents, date: today } });
+    const data = await rmFullText("CreateAssetValue", "mutation CreateAssetValue($input: CreateAssetValueInput!) {\n  createAssetValue(input: $input) {\n    asset {\n      id\n      name\n      type\n      includeInNetWorth\n      valueCents\n      __typename\n    }\n    __typename\n  }\n}", { input: { assetNodeId, valueCents, date: today } });
     const a = data.createAssetValue?.asset;
     if (!a)
         throw new Error(`createAssetValue returned no asset for "${assetNodeId}".`);
@@ -524,7 +556,7 @@ export async function updateSubscription(subscriptionNodeId, edit) {
     if (!node?.id)
         throw new Error(`No subscription found for id "${subscriptionNodeId}".`);
     const input = buildSubscriptionUpdateInput(node, edit);
-    const data = await rmMutation("UpdateSubscription", UPDATE_SUBSCRIPTION, { input });
+    const data = await rmFullText("UpdateSubscription", UPDATE_SUBSCRIPTION, { input });
     const saved = data.updateSubscription?.subscription;
     if (!saved)
         throw new Error(`updateSubscription returned no subscription for "${subscriptionNodeId}".`);
@@ -537,7 +569,7 @@ export async function updateSubscription(subscriptionNodeId, edit) {
  * deactivates a subscription RM detected from transactions.
  */
 export async function markSubscriptionActive(subscriptionNodeId) {
-    const data = await rmMutation("MarkSubscriptionActive", "mutation MarkSubscriptionActive($input: MarkSubscriptionActiveInput!) {\n  markSubscriptionActive(input: $input) {\n    subscription {\n      __typename\n      id\n      active\n    }\n    __typename\n  }\n}", { input: { subscriptionId: subscriptionNodeId } });
+    const data = await rmFullText("MarkSubscriptionActive", "mutation MarkSubscriptionActive($input: MarkSubscriptionActiveInput!) {\n  markSubscriptionActive(input: $input) {\n    subscription {\n      __typename\n      id\n      active\n    }\n    __typename\n  }\n}", { input: { subscriptionId: subscriptionNodeId } });
     return data.markSubscriptionActive?.subscription?.active ?? false;
 }
 /**
@@ -546,7 +578,7 @@ export async function markSubscriptionActive(subscriptionNodeId) {
  * a cancellation: the merchant keeps charging, RM just stops listing it.
  */
 export async function deleteSubscription(subscriptionNodeId) {
-    const data = await rmMutation("DeleteSubscription", "mutation DeleteSubscription($input: DeleteSubscriptionInput!) {\n  deleteSubscription(input: $input) {\n    __typename\n  }\n}", { input: { subscriptionId: subscriptionNodeId } });
+    const data = await rmFullText("DeleteSubscription", "mutation DeleteSubscription($input: DeleteSubscriptionInput!) {\n  deleteSubscription(input: $input) {\n    __typename\n  }\n}", { input: { subscriptionId: subscriptionNodeId } });
     return Boolean(data.deleteSubscription);
 }
 /** Upcoming bill/subscription charges in the next `days` days (default 28). */
@@ -688,7 +720,7 @@ export async function resolveCategoryNodeId(input) {
 }
 /** WRITE: set (or clear, with "") a transaction's free-text note. Returns the saved note. */
 export async function setTransactionNote(nodeId, note) {
-    const data = await rmMutation("SetTransactionNote", "mutation SetTransactionNote($input: SetTransactionNoteInput!) {\n  setTransactionNote(input: $input) {\n    __typename\n    transaction {\n      __typename\n      id\n      note\n    }\n  }\n}", { input: { transactionNodeId: nodeId, note } });
+    const data = await rmFullText("SetTransactionNote", "mutation SetTransactionNote($input: SetTransactionNoteInput!) {\n  setTransactionNote(input: $input) {\n    __typename\n    transaction {\n      __typename\n      id\n      note\n    }\n  }\n}", { input: { transactionNodeId: nodeId, note } });
     return data.setTransactionNote?.transaction?.note ?? note;
 }
 /**
@@ -699,7 +731,7 @@ export async function setTransactionNote(nodeId, note) {
 export async function setTransactionsCategory(nodeIds, catNodeId) {
     if (nodeIds.length === 0)
         return 0;
-    const data = await rmMutation("SetTransactionsCategory", "mutation SetTransactionsCategory($input: SetTransactionsCategoryInput!) {\n  setTransactionsCategory(input: $input) {\n    transactions {\n      id\n      category {\n        id\n        __typename\n      }\n      ignoredFrom\n      __typename\n    }\n    countUpdated\n    transactionOverrideIds\n    __typename\n  }\n}", {
+    const data = await rmFullText("SetTransactionsCategory", "mutation SetTransactionsCategory($input: SetTransactionsCategoryInput!) {\n  setTransactionsCategory(input: $input) {\n    transactions {\n      id\n      category {\n        id\n        __typename\n      }\n      ignoredFrom\n      __typename\n    }\n    countUpdated\n    transactionOverrideIds\n    __typename\n  }\n}", {
         input: {
             transactionNodeIds: nodeIds,
             transactionCategoryNodeId: catNodeId,
