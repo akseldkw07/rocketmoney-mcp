@@ -128,3 +128,22 @@ test("a rotated persisted hash falls back to the bundled query text", async () =
   assert.match(String(bodies[1].query), /^query Budgets/);
   assert.deepEqual(bodies[1].variables, bodies[0].variables);
 });
+
+test("RM calls run in parallel, at most 4 in flight", async () => {
+  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-conc-"));
+  seedSession("tb.auth0.sid=test");
+  let inFlight = 0;
+  let peak = 0;
+  globalThis.fetch = (async () => {
+    peak = Math.max(peak, ++inFlight);
+    await new Promise((r) => setTimeout(r, 20));
+    inFlight--;
+    return new Response(JSON.stringify({ data: { viewer: { id: "v" } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  await Promise.all(Array.from({ length: 10 }, () => getBudgets()));
+  assert.equal(peak, 4);
+  assert.equal(inFlight, 0);
+});

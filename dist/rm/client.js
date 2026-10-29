@@ -114,26 +114,46 @@ export function fromNodeId(nodeId) {
         return null;
     }
 }
-// Serialize every RM API call. The session cookie is a ROLLING token: each
-// response rotates it (Set-Cookie), and we persist the rotated jar. Two calls in
-// flight at once both send the same pre-rotation cookie; RM rotates it for the
-// first and the second's copy is instantly stale -> 401 -> the whole session is
-// marked dead. So a bot firing parallel tool calls (session_status + list_accounts
-// + budgets) would knock itself offline. Chaining calls onto a single promise
-// makes load-jar -> request -> save-jar atomic; concurrent callers just queue.
-let rmChain = Promise.resolve();
+// How many RM calls may be in flight at once. Every call used to be queued
+// behind the previous one, on the premise that each response rotates the session
+// cookie and two calls sharing one value would knock the session offline. On
+// 2026-10-29 the cookie did not rotate on AuthenticationCheck or RefreshAuthToken,
+// a replayed old value still worked, and 5 parallel requests on one cookie all
+// succeeded (144ms vs ~622ms queued). ROCKETMONEY_MAX_CONCURRENCY=1 restores the
+// old one-at-a-time behavior if rotation comes back.
+const MAX_CONCURRENCY = Math.max(1, Number(process.env.ROCKETMONEY_MAX_CONCURRENCY ?? 4) || 1);
+let active = 0;
+const waiting = [];
+async function acquireSlot() {
+    if (active < MAX_CONCURRENCY) {
+        active++;
+        return;
+    }
+    await new Promise((resolve) => waiting.push(resolve));
+}
+// Hands the slot straight to the next waiter (active stays the same), so a new
+// caller can't slip in between and exceed the limit.
+function releaseSlot() {
+    const next = waiting.shift();
+    if (next)
+        next();
+    else
+        active--;
+}
 /**
- * Core executor: POST a full GraphQL body with the live cookie jar, rotate the
- * jar from the response's Set-Cookie headers, and persist it. Throws
- * RMAuthError if the session is dead so callers can report "re-auth needed".
- * Serialized via rmChain so concurrent requests can't race the rolling cookie.
+ * Core executor: POST a full GraphQL body with the live cookie jar, apply any
+ * rotated cookies from the response, and persist them. Throws RMAuthError if
+ * the session is dead so callers can report "re-auth needed". At most
+ * MAX_CONCURRENCY calls run at once; the rest queue.
  */
-function rmExecute(opName, payload) {
-    const run = rmChain.then(() => withRelogin(opName, payload), () => withRelogin(opName, payload));
-    // Keep the chain alive regardless of this call's outcome (swallow here only;
-    // the real result/rejection still propagates to the caller via `run`).
-    rmChain = run.then(() => undefined, () => undefined);
-    return run;
+async function rmExecute(opName, payload) {
+    await acquireSlot();
+    try {
+        return await withRelogin(opName, payload);
+    }
+    finally {
+        releaseSlot();
+    }
 }
 // Mark the session dead and start a re-login right away (no-op unless auto-login
 // is configured; rate-limited inside attemptLogin) instead of waiting for the
@@ -211,17 +231,19 @@ async function rmExecuteUnlocked(opName, payload) {
         }
         throw new RMGraphQLError(`RM ${opName}: ${json.errors.map((e) => e.message).join("; ")}`, json.data, json.errors);
     }
-    // Healthy authenticated response - commit the rotated cookies.
+    // Healthy authenticated response - commit any rotated cookies onto the LATEST
+    // jar, not this call's copy: a parallel call may have saved a newer one.
     const setCookies = res.headers
         .getSetCookie?.();
+    const latest = loadSession() ?? jar;
     if (setCookies?.length)
-        applySetCookies(jar, setCookies);
-    saveSession(jar);
+        applySetCookies(latest, setCookies);
+    saveSession(latest);
     return json.data;
 }
 /**
  * Check a cookie header the login browser produced, outside the session file and
- * rmChain (nothing is marked dead, no re-login is triggered). The response rotates
+ * concurrency limit (nothing is marked dead, no re-login is triggered). The response rotates
  * the cookie and the old value goes stale, so this returns the ROTATED header to
  * seed with, or null if the cookie isn't authenticated.
  */

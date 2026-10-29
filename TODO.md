@@ -34,6 +34,9 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
       old value still worked. Find out when it does rotate, and whether the serialization
       and the 30-minute keepalive are still needed. Sessions still die every ~30-60 min
       (`HTTP 401 on RefreshAuthToken`), so something else ends them.
+      *Partly answered 2026-10-29: calls now run 4 at a time (`ROCKETMONEY_MAX_CONCURRENCY`,
+      set it to 1 to go back to one at a time) and a parallel burst of 8 tools kept the
+      session live. Still open: what ends sessions every 30-60 min.*
 
 ## Backlog [other agent]
 
@@ -101,7 +104,7 @@ probes on 2026-10-29.
       10,000-transaction backfill takes 50 sequential requests where 4 would do.
       *Fix:* page size 1000 by default, tunable up to 2500; also apply it to
       `deleteCategory`'s reassign scan and `/api/transactions`.
-- [ ] **A2. Every request waits for the previous one.** `rmChain` queues every call
+- [x] **A2. Every request waits for the previous one.** `rmChain` queues every call
       behind the one before, because each response was assumed to rotate the cookie.
       That no longer holds (see Investigate). Five parallel requests on one cookie all
       succeeded, in 144ms versus about 622ms in sequence. `/api/budget`'s `Promise.all`
@@ -109,7 +112,7 @@ probes on 2026-10-29.
       *Fix:* replace the global chain with a small concurrency limit (e.g. 4). Keep
       rotation handling: apply any `Set-Cookie` to the shared jar whenever it arrives.
       Only after the Investigate item confirms rotation is rare.
-- [ ] **A3. One request per transaction for date changes.** `setTransactionsDate`
+- [x] **A3. One request per transaction for date changes.** `setTransactionsDate`
       changes each id in its own call, and `"original"` adds a read per id: 200 ids can
       mean 400 requests. One request with aliased mutations
       (`a0: changeTransactionDate(...) a1: ...`) works (verified), and so do 50 aliased
@@ -117,7 +120,7 @@ probes on 2026-10-29.
       *Fix:* a shared `batchAliased(op, items, chunk = 50)` helper. Use it for date
       changes, the `"original"` lookups, and any future per-id operation; keep per-item
       errors.
-- [ ] **A4. Two disk reads and one write per API call.** `rmExecuteUnlocked` calls
+- [x] **A4. Two disk reads and one write per API call.** `rmExecuteUnlocked` calls
       `loadSession()` (reads and parses `session.json`), and `saveSession()` reads it
       again and rewrites it, synchronously, even when no cookie changed. A 50-page
       backfill does 150 blocking file operations.

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 // ── Rotating Rocket Money session ──────────────────────────────────
 //
@@ -21,19 +21,42 @@ function ensureDir(file) {
     if (!existsSync(dir))
         mkdirSync(dir, { recursive: true });
 }
-function readRow() {
+// Every RM call reads the session and most write it back, so the row is kept in
+// memory and the file is re-read only when its mtime changes (another process,
+// or a hand edit). Before this, each call did two synchronous reads and a write,
+// 150 blocking file operations for a 50-page backfill.
+let cached = null;
+function mtimeOf(file) {
     try {
-        return JSON.parse(readFileSync(sessionFile(), "utf8"));
+        return statSync(file).mtimeMs;
     }
     catch {
-        return null;
+        return -1;
     }
+}
+function readRow() {
+    const file = sessionFile();
+    const mtimeMs = mtimeOf(file);
+    if (cached && cached.file === file && cached.mtimeMs === mtimeMs)
+        return cached.row;
+    let row = null;
+    try {
+        row = JSON.parse(readFileSync(file, "utf8"));
+    }
+    catch {
+        row = null;
+    }
+    cached = { file, mtimeMs, row };
+    return row;
 }
 function writeRow(row) {
     const file = sessionFile();
     ensureDir(file);
     writeFileSync(file, JSON.stringify(row, null, 2));
+    cached = { file, mtimeMs: mtimeOf(file), row };
 }
+// refreshedAt is a "last seen working" stamp, not worth a disk write per call.
+const REFRESHED_AT_EVERY_MS = 60_000;
 /** Parse a `name=value; name2=value2` Cookie header string into a jar. */
 export function parseCookieHeader(header) {
     const jar = new Map();
@@ -114,11 +137,18 @@ export function loadSession() {
         return parseCookieHeader(row.cookie);
     return null;
 }
-/** Persist the rotated jar after a successful authenticated request. */
+/**
+ * Persist the jar after a successful authenticated request. Skips the write
+ * when nothing changed: same cookies, already live, refreshedAt recent.
+ */
 export function saveSession(jar) {
     const prev = readRow();
+    const cookie = serializeJar(jar);
+    const fresh = prev?.refreshedAt && Date.now() - Date.parse(prev.refreshedAt) < REFRESHED_AT_EVERY_MS;
+    if (prev && prev.status === "live" && prev.cookie === cookie && fresh)
+        return;
     writeRow({
-        cookie: serializeJar(jar),
+        cookie,
         status: "live",
         seededAt: prev?.seededAt,
         refreshedAt: new Date().toISOString(),
