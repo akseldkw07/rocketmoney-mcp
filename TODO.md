@@ -198,13 +198,16 @@ probes on 2026-10-29.
 
 ### E. Lower priority
 
-- [ ] `buildServer()` registers all 32 tools and their zod schemas on every
+- [x] `buildServer()` registers all 32 tools and their zod schemas on every
       `/mcp` request (a stateless transport). Building the tool definitions once at
       module load and only creating the `McpServer` per request would save CPU on each
-      call.
-- [ ] `createRule`/`updateRule` list every rule before and after saving, to find the new
+      call. *Measured 2026-10-29: 1.2ms per request against 100-300ms per Rocket Money
+      round trip, so not worth restructuring mcp.ts. Not doing it.*
+- [x] `createRule`/`updateRule` list every rule before and after saving, to find the new
       id. Probe whether `SaveTransactionRulePayload` exposes the rule (e.g.
-      `transactionRule { id }`) to save those two round trips.
+      `transactionRule { id }`) to save those two round trips. *Done: the payload has no rule field, but it
+      exposes `viewer`, so the save returns the post-save rule list. One list call saved per
+      create or update.*
 
 Suggested order: B1-B3 (bugs), D (dead code), A1 + A5 (cheap, large wins), C1-C8,
 then A2-A4 (need the rotation investigation and more care), then E.

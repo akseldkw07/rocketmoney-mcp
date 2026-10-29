@@ -190,7 +190,12 @@ function fakeApi(previewCount: number, rules: unknown[] = []) {
       TransactionRulesSearch: {
         viewer: { ruleTransactions: { numMatchingTransactions: previewCount, transactions: { edges: [] } } },
       },
-      SaveTransactionRuleMutation: { saveTransactionRule: { clientMutationId: null } },
+      SaveTransactionRuleMutation: {
+        saveTransactionRule: {
+          clientMutationId: null,
+          viewer: { transactionRules: { edges: rules.map((node) => ({ node })), pageInfo: { hasNextPage: false } } },
+        },
+      },
     };
     return new Response(JSON.stringify({ data: data[body.operationName] }), {
       status: 200,
@@ -231,6 +236,8 @@ test("createRule with apply_to_existing=true reports the preview count and adds 
   assert.equal(v1.postedDateBetween, undefined);
   assert.equal(r.existingTransactionsUpdated, 7);
   assert.equal(r.dateFloorAdded, null);
+  // One list before the save; the save itself returns the list after.
+  assert.equal(sent.filter((b) => b.operationName === "TransactionRulesPage").length, 1);
 });
 
 test("updateRule refuses a rule that already matches transactions unless apply_to_existing", async () => {
