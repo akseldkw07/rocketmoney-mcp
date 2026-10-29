@@ -4,7 +4,9 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
 
 ## Finish the current PR
 
-- [ ] Merge PR #5 (`fix/hash-rotation-and-rules`). The post-merge hook redeploys `main`.
+- [x] Merge PR #5 (`fix/hash-rotation-and-rules`).
+- [ ] Merge PR #7 (`fix/reported-bugs-and-sweep`): R1-R5 and the sweep. The post-merge hook
+      redeploys `main`.
 - [ ] Reconnect the `rocketmoney` MCP server in other Claude sessions (`/mcp` → reconnect)
       so they see the new tools: rules, categories, `set_transaction_date`,
       `set_transaction_ignore`.
