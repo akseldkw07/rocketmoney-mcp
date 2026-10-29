@@ -1,4 +1,5 @@
-import { collectPages, rmFullText, toRMTransaction, TRANSACTION_FIELDS } from "./client.js";
+import { collectPages, rmFullText } from "./graphql.js";
+import { toRMTransaction, TRANSACTION_FIELDS } from "./transactions.js";
 import { addDaysYmd, ymd } from "./windows.js";
 import { toCents } from "./format.js";
 // Transaction rules (Settings -> Transaction Rules, or "Edit Rule" on a

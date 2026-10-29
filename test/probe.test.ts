@@ -1,6 +1,6 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { probeSession } from "../src/rm/client.js";
+import { probeSession } from "../src/rm/graphql.js";
 import { jsonResponse, realFetch } from "./helpers.js";
 
 afterEach(() => {

@@ -65,6 +65,9 @@ From README's TODO section:
       deploy that changes a tool's parameters, start a new conversation (Claude Code:
       `/mcp` → reconnect, then a new session). Confirmed 2026-10-29: the server served the
       new `search_transactions` while an existing chat still saw the old one.
+- [ ] README: `PERSISTED` (the persisted-query hashes) moved from `src/rm/client.ts` to
+      `src/rm/graphql.ts` on 2026-10-29, and the refresh script now rewrites it there.
+      Update the README's mentions of `client.ts` for hashes.
 - [ ] README's `feat/generic-transaction-writes` item is done: the hash fix is merged and
       the branch was deleted 2026-10-29 (upstream keeps the gate-note commit). Remove it
       from README.
@@ -241,7 +244,7 @@ then A2-A4 (need the rotation investigation and more care), then E.
 - [x] **F4. Test fetch mocks repeated 11 times** across three test files, each rebuilding
       the `Response` and seeding a session by hand. *Fix:* `test/helpers.ts` with
       `mockGraphQL(handler)` and `freshSession()`.
-- [ ] **F5. `client.ts` is 1,329 lines of five concerns:** transport (headers, executor,
+- [x] **F5. `client.ts` is 1,329 lines of five concerns:** transport (headers, executor,
       concurrency, re-login, errors, batching), persisted reads, subscriptions,
       transactions and categories. *Fix:* split into `graphql.ts`, `transactions.ts` and
       `categories.ts`, with `client.ts` keeping the persisted reads, subscriptions and
