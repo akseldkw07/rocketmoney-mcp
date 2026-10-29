@@ -200,7 +200,7 @@ export function shapeSpending(data) {
         .map((x) => {
         const p = asObj(x);
         const cat = asObj(p.transactionCategory);
-        return { category: cat.label, type: cat.type, amount: usd(p.amount) };
+        return { category: cat.label, kind: cat.type, amount: usd(p.amount) };
     })
         .filter((c) => c.amount !== null)
         .sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));

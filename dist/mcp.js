@@ -123,7 +123,7 @@ function shapeRule(r) {
 const COMPACT = z
     .boolean()
     .optional()
-    .describe("Bulk-read form (default false): instead of `transactions`, returns a table {columns, categories, accounts, rows}. Each row is an array in `columns` order [id, date, amount, name, category, account, original_date, ignore]; category and account are indexes into `categories` / `accounts`; trailing empty cells are omitted (no original_date = same as date, no ignore = counted). Leaves out notes, renames and rule ids.");
+    .describe("Bulk-read form (default false): instead of `transactions`, returns a table {columns, categories, accounts, rows}. Each row is an array in `columns` order [id, date, amount, name, category, account, original_date, ignore]; category and account are indexes into `categories` / `accounts`; trailing empty cells are dropped, so rows vary in length (usually 6; 7 when re-dated; 8 when ignored) - read any missing cell as empty. Empty cells before the last filled one are null (e.g. [.., null, \"everything\"] = ignored, not re-dated). Empty means: no original_date = same as date; no ignore = counted; no category/account = none. Leaves out notes, renames and rule ids.");
 const ROW_FIELDS = "Each row has id, date (the current, possibly hand-changed date), amount, name, category and account. Fields are left out when empty: original_date (the date the bank posted it) appears only when it differs from date; ignore (budget = left out of budgets, everything = left out of all spending) only when the row is ignored; custom_name (a rename, by hand or by rule), note, applied_rule_ids (live rules that have applied to it; when several set the same field, the last id has been the effective one) and deleted_rule_ids (rules that applied before being deleted - Rocket Money keeps them in the row's history). Pass compact=true for bulk reads: a table about a third the size.";
 const RULE_PRECEDENCE = "Rule precedence (measured 2026-10-29 over 8 observations; Rocket Money has no priority or order field): when several rules set the same field on one transaction, which one wins is NOT predictable from the rules - not by save order, creation order, id, or specificity. Saving any rule can re-apply every overlapping rule to the shared transactions, in an order the API doesn't expose: a newly created rule lost to older ones, two rules created back to back finished in reverse order, and updating a rule (which Rocket Money does as delete + create) handed the win to an older overlapping rule. What held in every observation: the effective rule is the LAST id in the transaction's applied_rule_ids, so read that after saving instead of assuming. To get a deterministic result, don't let two rules set the same field on the same transaction: make the conditions mutually exclusive (e.g. split by account, amount range or exact name), or have the broad rule set a different field than the specific one, or fix the exceptions per transaction with set_transactions_category. delete_rule with undo_changes resets the fields that rule set to their original values even when another matching rule also sets them; re-save the other rule afterwards (update_rule with no changes).";
 const RULE_LIMITS = "Not supported by Rocket Money's rule API: tags, OR between conditions, more than one name condition, name regex/starts-with, and matching on category.";
@@ -435,8 +435,13 @@ export function buildServer() {
         annotations: WRITE,
     }, tool(async ({ transaction_ids, category }) => {
         const catNodeId = await rm.resolveCategoryNodeId(category);
-        const updated = await rm.setTransactionsCategory(transaction_ids, catNodeId);
-        return batchOutcome(transaction_ids.length, updated, { category, categoryNodeId: catNodeId });
+        const { valid, invalid } = rm.partitionTransactionIds(transaction_ids);
+        const updated = await rm.setTransactionsCategory(valid, catNodeId);
+        return batchOutcome(transaction_ids.length, updated, {
+            category,
+            categoryNodeId: catNodeId,
+            ...(invalid.length ? { invalid } : {}),
+        });
     }));
     server.registerTool("update_subscription", {
         title: "Update a subscription",
@@ -556,8 +561,9 @@ export function buildServer() {
         },
         annotations: WRITE,
     }, tool(async ({ transaction_ids, ignore }) => {
-        const updated = await rm.setTransactionsIgnored(transaction_ids, ignore === "none" ? null : ignore);
-        return batchOutcome(transaction_ids.length, updated, { ignore });
+        const { valid, invalid } = rm.partitionTransactionIds(transaction_ids);
+        const updated = await rm.setTransactionsIgnored(valid, ignore === "none" ? null : ignore);
+        return batchOutcome(transaction_ids.length, updated, { ignore, ...(invalid.length ? { invalid } : {}) });
     }));
     server.registerTool("set_transaction_date", {
         title: "Change transaction dates",

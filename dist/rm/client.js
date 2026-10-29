@@ -312,6 +312,36 @@ async function rmGraphQL(body) {
 export async function rmFullText(operationName, query, variables) {
     return rmExecute(operationName, { operationName, query, variables });
 }
+/**
+ * Why `id` can't be a transaction id, or null if it is one. Checked before
+ * sending: RM answers a bad id with a bare "An error occurred.", which says
+ * nothing about what was wrong.
+ */
+export function notATransactionId(id) {
+    return fromNodeId(id)?.type === "Transaction"
+        ? null
+        : `"${id}" is not a transaction id (use the \`id\` from search_transactions)`;
+}
+/** Split ids into transaction ids and the rest (with the reason each was refused). */
+export function partitionTransactionIds(ids) {
+    const valid = [];
+    const invalid = [];
+    for (const id of ids) {
+        const why = notATransactionId(id);
+        if (why)
+            invalid.push({ id, error: why });
+        else
+            valid.push(id);
+    }
+    return { valid, invalid };
+}
+/** RM's masked per-item error, reworded for a well-formed transaction id it still refused. */
+function explainItemError(message) {
+    if (!message || /^An error occurred\.?$/.test(message.trim())) {
+        return "Rocket Money refused it: no such transaction, or not one of yours (it only says \"An error occurred.\")";
+    }
+    return message;
+}
 /** How many aliased operations go in one request. 50 node reads took 91ms (2026-10-29). */
 export const BATCH_SIZE = 50;
 /**
@@ -780,15 +810,18 @@ export async function searchAllTransactions(opts) {
  * batches first. Returns each transaction's dates as RM saved them.
  */
 export async function setTransactionsDate(nodeIds, date) {
-    let targets = nodeIds.map(() => date);
-    const lookupErrors = [];
+    const lookupErrors = nodeIds.map((id) => notATransactionId(id) ?? undefined);
+    let targets = nodeIds.map((_, i) => (lookupErrors[i] ? null : date));
     if (date === "original") {
-        const posted = await batchAliased("TransactionPostedDates", "query", "node", { name: "id", type: "ID!" }, "id\n    ... on Transaction { posted_date }\n    __typename", nodeIds);
-        targets = posted.map((r, i) => {
+        const look = nodeIds.map((id, i) => ({ id, i })).filter((x) => !lookupErrors[x.i]);
+        const posted = await batchAliased("TransactionPostedDates", "query", "node", { name: "id", type: "ID!" }, "id\n    ... on Transaction { posted_date }\n    __typename", look.map((x) => x.id));
+        targets = nodeIds.map(() => null);
+        look.forEach((x, k) => {
+            const r = posted[k];
             if (r.data?.posted_date)
-                return r.data.posted_date;
-            lookupErrors[i] = r.error ?? "no such transaction, or it has no posted date";
-            return null;
+                targets[x.i] = r.data.posted_date;
+            else
+                lookupErrors[x.i] = r.ok ? "no such transaction, or it has no posted date" : explainItemError(r.error);
         });
     }
     const todo = nodeIds.map((id, i) => ({ id, i, target: targets[i] })).filter((t) => t.target !== null);
@@ -799,7 +832,7 @@ export async function setTransactionsDate(nodeIds, date) {
         const tx = r.data?.transaction;
         out[t.i] = tx?.date
             ? { id: t.id, date: tx.date, originalDate: tx.posted_date ?? "", error: undefined }
-            : { id: t.id, date: "", originalDate: "", error: r.error ?? "changeTransactionDate returned no transaction" };
+            : { id: t.id, date: "", originalDate: "", error: explainItemError(r.error) };
     });
     return out;
 }
@@ -962,10 +995,19 @@ export async function deleteCategory(input, reassignTo) {
  * mutations BATCH_SIZE per request. Returns each saved note, or an error per id.
  */
 export async function setTransactionsNote(items) {
-    const results = await batchAliased("SetTransactionNotes", "mutation", "setTransactionNote", { name: "input", type: "SetTransactionNoteInput!" }, "transaction { id note __typename }\n    __typename", items.map((it) => ({ transactionNodeId: it.nodeId, note: it.note })));
-    return results.map((r, i) => r.ok
-        ? { id: items[i].nodeId, note: r.data?.transaction?.note ?? null }
-        : { id: items[i].nodeId, note: null, error: r.error });
+    const out = items.map((it) => {
+        const why = notATransactionId(it.nodeId);
+        return why ? { id: it.nodeId, note: null, error: why } : { id: it.nodeId, note: null };
+    });
+    const todo = items.map((it, i) => ({ it, i })).filter((x) => !out[x.i].error);
+    const results = await batchAliased("SetTransactionNotes", "mutation", "setTransactionNote", { name: "input", type: "SetTransactionNoteInput!" }, "transaction { id note __typename }\n    __typename", todo.map(({ it }) => ({ transactionNodeId: it.nodeId, note: it.note })));
+    todo.forEach(({ it, i }, k) => {
+        const r = results[k];
+        out[i] = r.ok
+            ? { id: it.nodeId, note: r.data?.transaction?.note ?? null }
+            : { id: it.nodeId, note: null, error: explainItemError(r.error) };
+    });
+    return out;
 }
 /** WRITE: set (or clear, with "") a transaction's free-text note. Returns the saved note. */
 export async function setTransactionNote(nodeId, note) {

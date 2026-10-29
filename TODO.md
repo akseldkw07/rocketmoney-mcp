@@ -52,6 +52,12 @@ From README's TODO section:
 - [ ] Treat local-network timeouts/resets as offline without hiding real Rocket Money
       failures.
 - [ ] Capture the HAR for `npm run refresh-hashes` automatically.
+- [ ] README note: **tool changes don't reach existing chats.** A conversation that already
+      loaded a tool keeps the definition it loaded, even after Claude Desktop restarts or
+      the server redeploys; only tools it hadn't loaded yet come through new. After a
+      deploy that changes a tool's parameters, start a new conversation (Claude Code:
+      `/mcp` → reconnect, then a new session). Confirmed 2026-10-29: the server served the
+      new `search_transactions` while an existing chat still saw the old one.
 - [ ] README's `feat/generic-transaction-writes` item is done: the hash fix is merged and
       the branch was deleted 2026-10-29 (upstream keeps the gate-note commit). Remove it
       from README.

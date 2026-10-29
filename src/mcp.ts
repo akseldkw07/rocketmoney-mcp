@@ -138,7 +138,7 @@ const COMPACT = z
   .boolean()
   .optional()
   .describe(
-    "Bulk-read form (default false): instead of `transactions`, returns a table {columns, categories, accounts, rows}. Each row is an array in `columns` order [id, date, amount, name, category, account, original_date, ignore]; category and account are indexes into `categories` / `accounts`; trailing empty cells are omitted (no original_date = same as date, no ignore = counted). Leaves out notes, renames and rule ids.",
+    "Bulk-read form (default false): instead of `transactions`, returns a table {columns, categories, accounts, rows}. Each row is an array in `columns` order [id, date, amount, name, category, account, original_date, ignore]; category and account are indexes into `categories` / `accounts`; trailing empty cells are dropped, so rows vary in length (usually 6; 7 when re-dated; 8 when ignored) - read any missing cell as empty. Empty cells before the last filled one are null (e.g. [.., null, \"everything\"] = ignored, not re-dated). Empty means: no original_date = same as date; no ignore = counted; no category/account = none. Leaves out notes, renames and rule ids.",
   );
 
 const ROW_FIELDS =
@@ -619,8 +619,13 @@ export function buildServer(): McpServer {
     },
     tool(async ({ transaction_ids, category }: { transaction_ids: string[]; category: string }) => {
       const catNodeId = await rm.resolveCategoryNodeId(category);
-      const updated = await rm.setTransactionsCategory(transaction_ids, catNodeId);
-      return batchOutcome(transaction_ids.length, updated, { category, categoryNodeId: catNodeId });
+      const { valid, invalid } = rm.partitionTransactionIds(transaction_ids);
+      const updated = await rm.setTransactionsCategory(valid, catNodeId);
+      return batchOutcome(transaction_ids.length, updated, {
+        category,
+        categoryNodeId: catNodeId,
+        ...(invalid.length ? { invalid } : {}),
+      });
     }),
   );
 
@@ -781,8 +786,9 @@ export function buildServer(): McpServer {
       annotations: WRITE,
     },
     tool(async ({ transaction_ids, ignore }: { transaction_ids: string[]; ignore: "none" | "budget" | "everything" }) => {
-      const updated = await rm.setTransactionsIgnored(transaction_ids, ignore === "none" ? null : ignore);
-      return batchOutcome(transaction_ids.length, updated, { ignore });
+      const { valid, invalid } = rm.partitionTransactionIds(transaction_ids);
+      const updated = await rm.setTransactionsIgnored(valid, ignore === "none" ? null : ignore);
+      return batchOutcome(transaction_ids.length, updated, { ignore, ...(invalid.length ? { invalid } : {}) });
     }),
   );
 

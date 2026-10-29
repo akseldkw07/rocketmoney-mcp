@@ -4,7 +4,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { seedSession } from "../src/rm/session.js";
-import { batchAliased, getBudgets, setTransactionCategory, toRMTransaction } from "../src/rm/client.js";
+import {
+  batchAliased,
+  getBudgets,
+  partitionTransactionIds,
+  setTransactionCategory,
+  setTransactionsNote,
+  toRMTransaction,
+} from "../src/rm/client.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -146,4 +153,28 @@ test("RM calls run in parallel, at most 4 in flight", async () => {
   await Promise.all(Array.from({ length: 10 }, () => getBudgets()));
   assert.equal(peak, 4);
   assert.equal(inFlight, 0);
+});
+
+test("a non-transaction id is refused with a clear reason and never sent to Rocket Money", async () => {
+  process.env.ROCKETMONEY_STATE_DIR = mkdtempSync(join(tmpdir(), "rm-ids-"));
+  seedSession("tb.auth0.sid=test");
+  const sent: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_url: string, init: { body: string }) => {
+    const b = JSON.parse(init.body);
+    sent.push(b);
+    return new Response(
+      JSON.stringify({ data: { a0: null }, errors: [{ message: "An error occurred.", path: ["a0"] }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  const real = "VHJhbnNhY3Rpb246MTEyODExODAzNzkz"; // Transaction:112811803793
+  const out = await setTransactionsNote([
+    { nodeId: "bogus", note: "x" },
+    { nodeId: real, note: "y" },
+  ]);
+  assert.match(out[0].error ?? "", /not a transaction id/);
+  assert.match(out[1].error ?? "", /no such transaction, or not one of yours/);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(Object.values(sent[0].variables as object), [{ transactionNodeId: real, note: "y" }]);
+  assert.deepEqual(partitionTransactionIds(["bogus", real]).valid, [real]);
 });
