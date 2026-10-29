@@ -107,6 +107,8 @@ const dateToIso = (ymd) => `${ymd}T00:00:00.000Z`;
 const isoToDate = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
 const present = (v) => v !== null && v !== undefined && v !== "";
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
+/** Stands in for an open start date; earlier than any Rocket Money transaction. */
+export const EARLIEST_DATE = "2000-01-01";
 /**
  * Caller conditions -> MatchRulesV1Input, following the web client's encoding:
  * exact amount = inclusive [x, x]; min+max = inclusive range; min only =
@@ -167,9 +169,12 @@ export function conditionsToInput(c) {
     if (present(c.date_from) && present(c.date_to) && c.date_from > c.date_to) {
         throw new Error("date_from is after date_to.");
     }
+    // An open lower date bound can't be "-Infinity": RM rejects it for dates
+    // ("An error occurred.", 2026-10-29) though it takes "Infinity" as an open
+    // upper bound. A date_to alone gets a concrete floor before any transaction.
     if (present(c.date_from) || present(c.date_to)) {
         out.postedDateBetween = {
-            min: present(c.date_from) ? { value: dateToIso(c.date_from), inclusive: true } : { value: "-Infinity", inclusive: false },
+            min: { value: dateToIso(present(c.date_from) ? c.date_from : EARLIEST_DATE), inclusive: true },
             max: present(c.date_to) ? { value: dateToIso(c.date_to), inclusive: true } : { value: "Infinity", inclusive: false },
         };
     }
@@ -230,7 +235,7 @@ export function parseRule(node) {
     if (dates) {
         const from = isoToDate(dates.min.value);
         const to = isoToDate(dates.max.value);
-        if (from)
+        if (from && from !== EARLIEST_DATE)
             c.date_from = from;
         if (to)
             c.date_to = to;
@@ -331,7 +336,19 @@ export async function listRules() {
             break;
         cursor = conn.pageInfo.endCursor;
     }
+    liveIdCache = { at: Date.now(), ids: new Set(rules.map((r) => r.id)) };
     return rules;
+}
+// Live rule ids, so transaction rows can tell a rule that still exists from one
+// RM keeps in a transaction's history after it was deleted. Short-lived: rules
+// change only through the tools here (which clear it) or the web app.
+let liveIdCache = null;
+const LIVE_ID_TTL_MS = 60_000;
+export async function liveRuleIds() {
+    if (liveIdCache && Date.now() - liveIdCache.at < LIVE_ID_TTL_MS)
+        return liveIdCache.ids;
+    await listRules();
+    return liveIdCache.ids;
 }
 export async function getRule(ruleId) {
     const rule = (await listRules()).find((r) => r.id === ruleId);
@@ -352,12 +369,14 @@ export async function previewMatches(matchRules, first = 20) {
 }
 /** WRITE: create (no ruleId) or replace (ruleId) a rule. RM applies it to every current match. */
 export async function saveRule(matchRules, operation, ruleId) {
+    liveIdCache = null;
     await rmFullText("SaveTransactionRuleMutation", SAVE_RULE, {
         input: { matchRules: { v1: matchRules }, ...operation, ...(ruleId ? { id: ruleId } : {}) },
     });
 }
 /** WRITE: delete a rule. keepChanges=false also reverts what it changed on past transactions. */
 export async function destroyRule(ruleId, keepChanges) {
+    liveIdCache = null;
     await rmFullText("DestroyTransactionRule", DESTROY_RULE, {
         input: { ruleId, keepRuleChanges: keepChanges },
     });

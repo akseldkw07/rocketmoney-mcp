@@ -83,6 +83,17 @@ export class RMAuthError extends Error {}
 /** Thrown when RM no longer recognizes a persisted-query hash. */
 export class PersistedQueryNotFoundError extends Error {}
 
+/** A GraphQL-level failure. Carries whatever data came back, so a batch can keep its partial results. */
+export class RMGraphQLError extends Error {
+  constructor(
+    message: string,
+    readonly data: unknown,
+    readonly errors: Array<{ message: string; path?: (string | number)[] }>,
+  ) {
+    super(message);
+  }
+}
+
 // Relay global IDs are base64 of `Type:numericId`. RM already returns opaque
 // base64 `id` fields on nodes, so we only need to BUILD ids when the caller
 // passes a numeric id (e.g. a category number from another screen).
@@ -237,7 +248,7 @@ async function rmExecuteUnlocked<T = unknown>(opName: string, payload: Record<st
           `\`npm run refresh-hashes -- <file.har>\` (it rewrites PERSISTED in src/rm/client.ts).`,
       );
     }
-    throw new Error(`RM ${opName}: ${json.errors.map((e) => e.message).join("; ")}`);
+    throw new RMGraphQLError(`RM ${opName}: ${json.errors.map((e) => e.message).join("; ")}`, json.data, json.errors);
   }
 
   // Healthy authenticated response - commit the rotated cookies.
@@ -328,6 +339,60 @@ export async function rmFullText<T = unknown>(
   variables: Record<string, unknown>,
 ): Promise<T> {
   return rmExecute<T>(operationName, { operationName, query, variables });
+}
+
+/** How many aliased operations go in one request. 50 node reads took 91ms (2026-10-29). */
+export const BATCH_SIZE = 50;
+
+export interface BatchResult<R> {
+  ok: boolean;
+  data?: R;
+  error?: string;
+}
+
+/**
+ * Run `field` once per input as aliased fields of one document, BATCH_SIZE per
+ * request - RM's per-transaction operations (changeTransactionDate,
+ * setTransactionNote, node reads) accept many aliases in one request (verified
+ * 2026-10-29), so N items cost N/50 round trips instead of N. Results come back
+ * in input order; one item failing doesn't sink the rest of its batch.
+ */
+export async function batchAliased<R>(
+  opName: string,
+  kind: "query" | "mutation",
+  field: string,
+  arg: { name: string; type: string },
+  selection: string,
+  inputs: unknown[],
+): Promise<BatchResult<R>[]> {
+  const out: BatchResult<R>[] = [];
+  for (let start = 0; start < inputs.length; start += BATCH_SIZE) {
+    const chunk = inputs.slice(start, start + BATCH_SIZE);
+    const vars = chunk.map((_, i) => `$v${i}: ${arg.type}`).join(", ");
+    const fields = chunk.map((_, i) => `a${i}: ${field}(${arg.name}: $v${i}) {\n    ${selection}\n  }`).join("\n  ");
+    const query = `${kind} ${opName}(${vars}) {\n  ${fields}\n}`;
+    const variables = Object.fromEntries(chunk.map((v, i) => [`v${i}`, v]));
+    let data: Record<string, unknown> = {};
+    let errors: RMGraphQLError["errors"] = [];
+    try {
+      data = (await rmFullText<Record<string, unknown>>(opName, query, variables)) ?? {};
+    } catch (err) {
+      if (!(err instanceof RMGraphQLError)) throw err;
+      data = (err.data as Record<string, unknown> | null) ?? {};
+      errors = err.errors;
+    }
+    chunk.forEach((_, i) => {
+      const alias = `a${i}`;
+      const own = errors.filter((e) => e.path?.[0] === alias).map((e) => e.message);
+      if (data[alias] != null && !own.length) out.push({ ok: true, data: data[alias] as R });
+      else {
+        // An error with no path can't be pinned to one alias, so it is reported on every item.
+        const unpinned = errors.filter((e) => !e.path?.length).map((e) => e.message);
+        out.push({ ok: false, error: [...own, ...unpinned].join("; ") || "no result returned" });
+      }
+    });
+  }
+  return out;
 }
 
 // ── Generic helpers ────────────────────────────────────────────────
@@ -863,49 +928,51 @@ export async function searchTransactions(
   return (await searchTransactionsPage({ query, gteDate, accountIds, limit: maxPages * 200 })).transactions;
 }
 
-const CHANGE_DATE = `mutation ChangeTransactionDate($input: ChangeTransactionDateInput!) {
-  changeTransactionDate(input: $input) {
-    transaction { id date posted_date __typename }
-    __typename
-  }
-}`;
-
 /**
  * WRITE: change transactions' dates. RM's mutation takes one transaction, so
- * this is one call per id. `date` "original" resets each to its posted_date,
- * which RM keeps untouched through any number of date changes (verified
- * 2026-10-29). Returns each transaction's dates as RM saved them.
+ * the ids go out as aliased mutations, BATCH_SIZE per request. `date`
+ * "original" resets each to its posted_date, which RM keeps untouched through
+ * any number of date changes (verified 2026-10-29); those are looked up in
+ * batches first. Returns each transaction's dates as RM saved them.
  */
 export async function setTransactionsDate(
   nodeIds: string[],
   date: string,
 ): Promise<{ id: string; date: string; originalDate: string; error?: string }[]> {
-  const out: { id: string; date: string; originalDate: string; error?: string }[] = [];
-  for (const id of nodeIds) {
-    try {
-      let target = date;
-      if (date === "original") {
-        const read = await rmFullText<{ node?: { posted_date?: string } }>(
-          "TransactionPostedDate",
-          "query TransactionPostedDate($id: ID!) {\n  node(id: $id) {\n    id\n    ... on Transaction {\n      posted_date\n    }\n    __typename\n  }\n}",
-          { id },
-        );
-        if (!read.node?.posted_date) throw new Error("no such transaction, or it has no posted date");
-        target = read.node.posted_date;
-      }
-      const data = await rmFullText<{ changeTransactionDate?: { transaction?: { date?: string; posted_date?: string } } }>(
-        "ChangeTransactionDate",
-        CHANGE_DATE,
-        { input: { transactionNodeId: id, date: target } },
-      );
-      const t = data.changeTransactionDate?.transaction;
-      if (!t?.date) throw new Error("changeTransactionDate returned no transaction");
-      out.push({ id, date: t.date, originalDate: t.posted_date ?? "" });
-    } catch (err) {
-      if (err instanceof RMAuthError) throw err;
-      out.push({ id, date: "", originalDate: "", error: err instanceof Error ? err.message : String(err) });
-    }
+  let targets: (string | null)[] = nodeIds.map(() => date);
+  const lookupErrors: (string | undefined)[] = [];
+  if (date === "original") {
+    const posted = await batchAliased<{ posted_date?: string }>(
+      "TransactionPostedDates",
+      "query",
+      "node",
+      { name: "id", type: "ID!" },
+      "id\n    ... on Transaction { posted_date }\n    __typename",
+      nodeIds,
+    );
+    targets = posted.map((r, i) => {
+      if (r.data?.posted_date) return r.data.posted_date;
+      lookupErrors[i] = r.error ?? "no such transaction, or it has no posted date";
+      return null;
+    });
   }
+  const todo = nodeIds.map((id, i) => ({ id, i, target: targets[i] })).filter((t) => t.target !== null);
+  const saved = await batchAliased<{ transaction?: { date?: string; posted_date?: string } }>(
+    "ChangeTransactionDates",
+    "mutation",
+    "changeTransactionDate",
+    { name: "input", type: "ChangeTransactionDateInput!" },
+    "transaction { id date posted_date __typename }\n    __typename",
+    todo.map((t) => ({ transactionNodeId: t.id, date: t.target })),
+  );
+  const out = nodeIds.map((id, i) => ({ id, date: "", originalDate: "", error: lookupErrors[i] }));
+  todo.forEach((t, k) => {
+    const r = saved[k];
+    const tx = r.data?.transaction;
+    out[t.i] = tx?.date
+      ? { id: t.id, date: tx.date, originalDate: tx.posted_date ?? "", error: undefined }
+      : { id: t.id, date: "", originalDate: "", error: r.error ?? "changeTransactionDate returned no transaction" };
+  });
   return out;
 }
 
@@ -1127,6 +1194,28 @@ export async function deleteCategory(
   );
   _catCache = null;
   return { deleted: cat, reassigned, reassignedTo: target };
+}
+
+/**
+ * WRITE: set (or clear, with "") notes on many transactions, as aliased
+ * mutations BATCH_SIZE per request. Returns each saved note, or an error per id.
+ */
+export async function setTransactionsNote(
+  items: { nodeId: string; note: string }[],
+): Promise<{ id: string; note: string | null; error?: string }[]> {
+  const results = await batchAliased<{ transaction?: { note?: string | null } }>(
+    "SetTransactionNotes",
+    "mutation",
+    "setTransactionNote",
+    { name: "input", type: "SetTransactionNoteInput!" },
+    "transaction { id note __typename }\n    __typename",
+    items.map((it) => ({ transactionNodeId: it.nodeId, note: it.note })),
+  );
+  return results.map((r, i) =>
+    r.ok
+      ? { id: items[i].nodeId, note: r.data?.transaction?.note ?? null }
+      : { id: items[i].nodeId, note: null, error: r.error },
+  );
 }
 
 /** WRITE: set (or clear, with "") a transaction's free-text note. Returns the saved note. */

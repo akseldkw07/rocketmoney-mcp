@@ -12,12 +12,16 @@ const AUTH_HINT =
 /** With ROCKETMONEY_READ_ONLY=1 the write tools are never registered, so a client cannot reach them. */
 export const READ_ONLY = /^(1|true|yes)$/i.test(process.env.ROCKETMONEY_READ_ONLY ?? "");
 
-/** Wrap a tool body so RMAuthError becomes a clean, actionable MCP error. */
+/**
+ * Wrap a tool body so RMAuthError becomes a clean, actionable MCP error.
+ * Results are compact JSON: indenting added ~30-40% to every response, which on
+ * a 1,200-row search is hundreds of KB the client has to carry.
+ */
 function tool<T>(fn: (args: T) => Promise<unknown>) {
   return async (args: T) => {
     try {
       const result = await fn(args);
-      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     } catch (err) {
       const msg = err instanceof RMAuthError ? `${AUTH_HINT}\n\n(${err.message})` : String(err);
       return { content: [{ type: "text" as const, text: msg }], isError: true };
@@ -136,27 +140,88 @@ function shapeRule(r: rules.RMRule) {
   };
 }
 
-/** One transaction row, the same shape from every tool that lists transactions. */
-function shapeTxn(t: rm.RMTransaction, labels: Map<string, string>) {
-  return {
+interface RowContext {
+  labels: Map<string, string>;
+  /** null when no row has rule ids, so the rule list wasn't fetched. */
+  liveRules: Set<string> | null;
+}
+
+/**
+ * One transaction row, the same shape from every tool that lists transactions.
+ * Empty fields are left out rather than sent as null/[]; on a large pull they
+ * are most of the payload. (compactTable is the bulk form.)
+ */
+function shapeTxn(t: rm.RMTransaction, ctx: RowContext) {
+  const row: Record<string, unknown> = {
     id: t.nodeId,
     date: t.date,
-    original_date: t.originalDate,
     amount: fmt.usd(t.amountCents),
     name: t.name,
-    custom_name: t.customName,
     category: t.categoryLabel,
-    account: t.accountId ? (labels.get(t.accountId) ?? t.accountId) : null,
-    ignore: t.ignoredFrom ?? "none",
-    applied_rule_ids: t.ruleIds,
-    note: t.note,
+    account: t.accountId ? (ctx.labels.get(t.accountId) ?? t.accountId) : null,
+  };
+  if (t.originalDate && t.originalDate !== t.date) row.original_date = t.originalDate;
+  if (t.ignoredFrom) row.ignore = t.ignoredFrom;
+  if (t.customName) row.custom_name = t.customName;
+  if (t.note) row.note = t.note;
+  if (t.ruleIds.length) {
+    const live = t.ruleIds.filter((id) => ctx.liveRules?.has(id));
+    const deleted = t.ruleIds.filter((id) => !ctx.liveRules?.has(id));
+    if (live.length) row.applied_rule_ids = live;
+    if (deleted.length) row.deleted_rule_ids = deleted;
+  }
+  return row;
+}
+
+const COMPACT_COLUMNS = ["id", "date", "amount", "name", "category", "account", "original_date", "ignore"] as const;
+
+/**
+ * Compact form for bulk reads: a table instead of an object per row. Column
+ * names appear once, and category and account - the longest repeated strings -
+ * are indexes into `categories` / `accounts`. Trailing empty cells are dropped.
+ * About half the size of compact objects on a 1,200-row pull.
+ */
+function compactTable(txns: rm.RMTransaction[], labels: Map<string, string>) {
+  const categories: string[] = [];
+  const accounts: string[] = [];
+  const index = (list: string[], v: string | null) => {
+    if (v === null) return null;
+    const i = list.indexOf(v);
+    return i >= 0 ? i : list.push(v) - 1;
+  };
+  const rows = txns.map((t) => {
+    const row: unknown[] = [
+      t.nodeId,
+      t.date,
+      fmt.usd(t.amountCents),
+      t.name,
+      index(categories, t.categoryLabel),
+      index(accounts, t.accountId ? (labels.get(t.accountId) ?? t.accountId) : null),
+      t.originalDate && t.originalDate !== t.date ? t.originalDate : null,
+      t.ignoredFrom ?? null,
+    ];
+    while (row.length && row[row.length - 1] === null) row.pop();
+    return row;
+  });
+  return { columns: COMPACT_COLUMNS, categories, accounts, rows };
+}
+
+async function shapeTxns(txns: rm.RMTransaction[], compact = false) {
+  const { labels, warning } = txns.length ? await accountLabelsOrIds() : { labels: new Map<string, string>() };
+  if (compact) return { ...(warning ? { warning } : {}), ...compactTable(txns, labels) };
+  const liveRules = txns.some((t) => t.ruleIds.length) ? await rules.liveRuleIds() : null;
+  return {
+    ...(warning ? { warning } : {}),
+    transactions: txns.map((t) => shapeTxn(t, { labels, liveRules })),
   };
 }
 
-async function shapeTxns(txns: rm.RMTransaction[]) {
-  const { labels, warning } = txns.length ? await accountLabelsOrIds() : { labels: new Map<string, string>() };
-  return { ...(warning ? { warning } : {}), transactions: txns.map((t) => shapeTxn(t, labels)) };
-}
+const COMPACT = z
+  .boolean()
+  .optional()
+  .describe(
+    "Bulk-read form (default false): instead of `transactions`, returns a table {columns, categories, accounts, rows}. Each row is an array in `columns` order [id, date, amount, name, category, account, original_date, ignore]; category and account are indexes into `categories` / `accounts`; trailing empty cells are omitted (no original_date = same as date, no ignore = counted). Leaves out notes, renames and rule ids.",
+  );
 
 /** YYYY-MM-DD plus n days. */
 function shiftYmd(ymd: string, n: number): string {
@@ -166,7 +231,7 @@ function shiftYmd(ymd: string, n: number): string {
 }
 
 const ROW_FIELDS =
-  "Each row has date (the current, possibly hand-changed date), original_date (the date the bank posted it), ignore (none = counted, budget = left out of budgets, everything = left out of all spending), applied_rule_ids (rules that have applied to it; when several set the same field, the last id has been the effective one), custom_name (a rename, by hand or by rule), category and account.";
+  "Each row has id, date (the current, possibly hand-changed date), amount, name, category and account. Fields are left out when empty: original_date (the date the bank posted it) appears only when it differs from date; ignore (budget = left out of budgets, everything = left out of all spending) only when the row is ignored; custom_name (a rename, by hand or by rule), note, applied_rule_ids (live rules that have applied to it; when several set the same field, the last id has been the effective one) and deleted_rule_ids (rules that applied before being deleted - Rocket Money keeps them in the row's history). Pass compact=true for bulk reads: a table about a third the size.";
 
 const RULE_PRECEDENCE =
   "Rule precedence (measured 2026-10-29 over 8 observations; Rocket Money has no priority or order field): when several rules set the same field on one transaction, which one wins is NOT predictable from the rules - not by save order, creation order, id, or specificity. Saving any rule can re-apply every overlapping rule to the shared transactions, in an order the API doesn't expose: a newly created rule lost to older ones, two rules created back to back finished in reverse order, and updating a rule (which Rocket Money does as delete + create) handed the win to an older overlapping rule. What held in every observation: the effective rule is the LAST id in the transaction's applied_rule_ids, so read that after saving instead of assuming. To get a deterministic result, don't let two rules set the same field on the same transaction: make the conditions mutually exclusive (e.g. split by account, amount range or exact name), or have the broad rule set a different field than the specific one, or fix the exceptions per transaction with set_transactions_category. delete_rule with undo_changes resets the fields that rule set to their original values even when another matching rule also sets them; re-save the other rule afterwards (update_rule with no changes).";
@@ -399,6 +464,7 @@ export function buildServer(): McpServer {
           .describe("Only these categories: labels, numeric ids or category node ids (see list_categories)"),
         limit: z.number().int().min(1).max(10000).optional().describe("Max rows to return (default 1200)"),
         cursor: z.string().optional().describe("next_cursor from a previous call, to fetch the next rows"),
+        compact: COMPACT,
       },
       annotations: READ,
     },
@@ -412,6 +478,7 @@ export function buildServer(): McpServer {
         category_ids?: string[];
         limit?: number;
         cursor?: string;
+        compact?: boolean;
       }) => {
         const byOriginal = args.date_field === "original_date";
         const categoryIds = await Promise.all((args.category_ids ?? []).map((c) => rm.resolveCategoryNodeId(c)));
@@ -431,7 +498,7 @@ export function buildServer(): McpServer {
               (t) => (!args.since || t.originalDate >= args.since) && (!args.until || t.originalDate <= args.until),
             )
           : page.transactions;
-        return { count: txns.length, next_cursor: page.nextCursor, ...(await shapeTxns(txns)) };
+        return { count: txns.length, next_cursor: page.nextCursor, ...(await shapeTxns(txns, args.compact)) };
       },
     ),
   );
@@ -447,10 +514,11 @@ export function buildServer(): McpServer {
         category_id: z.string().describe("The category: a label like 'Groceries', a numeric id, or a TransactionCategory node id"),
         since: z.string().regex(YMD).optional().describe("On/after this date (YYYY-MM-DD); default the 1st of this month"),
         until: z.string().regex(YMD).optional().describe("On/before this date (YYYY-MM-DD); default today and later"),
+        compact: COMPACT,
       },
       annotations: READ,
     },
-    tool(async ({ category_id, since, until }: { category_id: string; since?: string; until?: string }) => {
+    tool(async ({ category_id, since, until, compact }: { category_id: string; since?: string; until?: string; compact?: boolean }) => {
       const now = new Date();
       const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
       const page = await rm.searchTransactionsPage({
@@ -459,7 +527,7 @@ export function buildServer(): McpServer {
         ltDate: until ? shiftYmd(until, 1) : null,
         limit: 2000,
       });
-      return { count: page.transactions.length, ...(await shapeTxns(page.transactions)) };
+      return { count: page.transactions.length, ...(await shapeTxns(page.transactions, compact)) };
     }),
   );
 
@@ -512,14 +580,15 @@ export function buildServer(): McpServer {
         "One transaction rule in full plus a sample of the transactions it matches (newest first, with transaction ids). Pass the rule id from list_rules.",
       inputSchema: {
         rule_id: z.string().describe("The rule id (the `id` from list_rules)"),
-        sample_size: z.number().int().min(1).max(100).optional().describe("Matched transactions to return (default 20)"),
+        sample_size: z.number().int().min(1).max(2000).optional().describe("Matched transactions to return, newest first (default 20, max 2000)"),
+        compact: COMPACT,
       },
       annotations: READ,
     },
-    tool(async ({ rule_id, sample_size }: { rule_id: string; sample_size?: number }) => {
+    tool(async ({ rule_id, sample_size, compact }: { rule_id: string; sample_size?: number; compact?: boolean }) => {
       const rule = await rules.getRule(rule_id);
       const { count, sample } = await rules.previewMatches(rule.matchRulesInput, sample_size ?? 20);
-      return { ...shapeRule(rule), matchedNow: count, sample: await shapeTxns(sample) };
+      return { ...shapeRule(rule), matchedNow: count, sample: await shapeTxns(sample, compact) };
     }),
   );
 
@@ -532,13 +601,14 @@ export function buildServer(): McpServer {
         RULE_LIMITS,
       inputSchema: {
         conditions: ruleConditionsSchema,
-        sample_size: z.number().int().min(1).max(100).optional().describe("Matched transactions to return (default 20)"),
+        sample_size: z.number().int().min(1).max(2000).optional().describe("Matched transactions to return, newest first (default 20, max 2000)"),
+        compact: COMPACT,
       },
       annotations: READ,
     },
-    tool(async ({ conditions, sample_size }: { conditions: ConditionsArg; sample_size?: number }) => {
+    tool(async ({ conditions, sample_size, compact }: { conditions: ConditionsArg; sample_size?: number; compact?: boolean }) => {
       const { count, sample } = await rules.previewMatches(rules.conditionsToInput(conditions), sample_size ?? 20);
-      return { matchedCount: count, sample: await shapeTxns(sample) };
+      return { matchedCount: count, sample: await shapeTxns(sample, compact) };
     }),
   );
 
@@ -565,6 +635,37 @@ export function buildServer(): McpServer {
       const saved = await rm.setTransactionNote(transaction_id, note);
       return { transaction_id, note: saved, ok: true };
     }),
+  );
+
+  server.registerTool(
+    "set_transaction_notes",
+    {
+      title: "Set notes on many transactions",
+      description:
+        "WRITES to Rocket Money: set (or clear, with an empty string) notes on a batch of transactions in one call - either one `note` for every id in `transaction_ids`, or a different note per transaction in `notes`. Sent 50 per request. Returns each saved note, or an error for that id.",
+      inputSchema: {
+        transaction_ids: z.array(z.string()).optional().describe("Transaction node ids that all get `note`"),
+        note: z.string().optional().describe("The note for every id in transaction_ids (empty string clears)"),
+        notes: z
+          .array(z.object({ transaction_id: z.string(), note: z.string() }))
+          .optional()
+          .describe("Per-transaction notes, instead of transaction_ids + note"),
+      },
+      annotations: WRITE,
+    },
+    tool(
+      async (a: { transaction_ids?: string[]; note?: string; notes?: { transaction_id: string; note: string }[] }) => {
+        const items = [
+          ...(a.notes ?? []).map((n) => ({ nodeId: n.transaction_id, note: n.note })),
+          ...(a.transaction_ids ?? []).map((id) => ({ nodeId: id, note: a.note ?? "" })),
+        ];
+        if (a.transaction_ids?.length && a.note === undefined) throw new Error("transaction_ids needs a `note`.");
+        if (!items.length) throw new Error("Pass transaction_ids + note, or notes.");
+        const results = await rm.setTransactionsNote(items);
+        const failed = results.filter((r) => r.error).length;
+        return { requested: items.length, updatedCount: items.length - failed, results, ok: failed === 0 };
+      },
+    ),
   );
 
   server.registerTool(

@@ -62,28 +62,28 @@ Not a bug: `search_transactions` already has `cursor`, `until` and `limit`. The 
 client had a stale tool list, so restart Claude Desktop. Verified: the Personal Profile
 account pages 1,200 + 531 rows (all 1,731, no overlap), and `until` works.
 
-- [ ] **R1. Search responses are too big.** 1,200 rows came to 536 KB, more than the
+- [x] **R1. Search responses are too big.** 1,200 rows came to 536 KB, more than the
       client will display. *Fix:* a `fields` parameter (or `compact: true`) returning
       only id, date, original_date, amount, name, category, account and ignore. Also
       emit compact JSON and drop null/empty fields (sweep item A5).
-- [ ] **R2. A rule condition with `date_to` and no `date_from` fails** with
+- [x] **R2. A rule condition with `date_to` and no `date_from` fails** with
       `RM TransactionRulesSearch: An error occurred.` `conditionsToInput` sends the open
       lower bound as `{value: "-Infinity", inclusive: false}`, which Rocket Money rejects
       for dates (the open upper bound `"Infinity"` is accepted). This breaks
       `preview_rule`, `create_rule` and `update_rule`. *Fix:* send an early concrete date
       (e.g. `2000-01-01T00:00:00.000Z`, inclusive) when only `date_to` is given, and add
       a test.
-- [ ] **R3. `preview_rule` / `get_rule` samples are capped at 100.** The cap is ours
+- [x] **R3. `preview_rule` / `get_rule` samples are capped at 100.** The cap is ours
       (zod `max(100)`). Rocket Money's `ruleTransactions(first:)` returned all 1,731 rows
       in one 171ms request. *Fix:* raise the cap to 2,000, and have the sample use the
       same compact row option as R1.
-- [ ] **R4. `applied_rule_ids` lists deleted rules.** Rocket Money keeps a rule's id in a
+- [x] **R4. `applied_rule_ids` lists deleted rules.** Rocket Money keeps a rule's id in a
       transaction's history after the rule is deleted. On the Personal Profile account,
       `…MjQzMz` (32892433) is on all 1,200 recent rows and `…MjQ0MA==` (32892440) on 47;
       neither is in `list_rules`, and `get_rule` errors. *Fix:* compare against
       `listRules()` (cached briefly) and return `applied_rules: [{id, deleted: true}]`,
       or a separate `deleted_rule_ids`, so live rules can be told apart.
-- [ ] **R5. Notes can only be set one transaction per call.** *Fix:*
+- [x] **R5. Notes can only be set one transaction per call.** *Fix:*
       `set_transaction_notes` taking `transaction_ids[]` + `note`, or a list of
       `{transaction_id, note}` pairs. Send them as aliased `setTransactionNote` mutations,
       50 per request (aliasing verified with `changeTransactionDate`), with a result per
