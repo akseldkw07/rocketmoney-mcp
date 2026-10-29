@@ -88,7 +88,8 @@ them, and moving a row out of them makes it count again (no separate ignore swit
 - **Duplicate imports.** When an account is reconnected, Rocket Money can re-import history
   under new transaction ids, so the same payment appears twice (same name and amount, dated
   within a day or two). Keep the older copy filed by purpose and move the newer copy to
-  `Ignore`. Don't delete it: the MCP has no delete, and `Ignore` is reversible. Before
+  `Ignore`. Don't delete it: the MCP has no delete, and `Ignore` is reversible. (Or keep it
+  in its category and set `set_transaction_ignore(…, "everything")`.) Before
   marking a row as a duplicate, check that the copies sit on the same account and that the
   doubling covers a whole stretch of dates, not one coincidental pair.
 
@@ -126,9 +127,9 @@ Use these sources of evidence, in this order:
 If a note is missing entirely (Zelle, Apple Cash and PayPal rows have none), look for a
 matching charge or Venmo note on the same day or with the same amount before guessing.
 
-For `uncertain` items, write the transaction note on anything of $250 or more, and list every
-uncertain item in a review file (`Finance/Rocket-Money/p2p-uncertain-review-<date>.csv`), since
-notes go one call at a time.
+For `uncertain` items, write the transaction note (`set_transaction_notes` takes the whole
+batch in one call, with a different note per transaction) and list every uncertain item in
+the run's report for the user to confirm.
 
 A `… group split` note (from Splitwise) settles one shared charge. Find that charge and use
 its category.
@@ -138,10 +139,17 @@ its category.
 1. **Collect the unsorted person-to-person payments since the last run:**
    - `search_transactions(account_ids=[<Venmo account id>], since=…)`
    - `search_transactions(query="Zelle", since=…)`
-   - `category_transactions(<Venmo category id>)` for anything still sitting in `Venmo`
+   - `category_transactions("Venmo", since=…)` for anything still sitting in `Venmo`
+
+   `search_transactions` also takes `until`, `date_field` (`date` or `original_date`),
+   `category_ids`, `limit` and `cursor` (pass back `next_cursor` to page through long
+   histories). `compact=true` returns a much smaller table for bulk reads. Every row has
+   `date`, `original_date` (when they differ), `ignore`, and the rules that applied to it.
+   Note that `query` matching is fuzzy: "AIRLINK" also matches "AIR LINES".
 2. **Note `spending_summary` before making changes.**
 3. **Decide each transaction's category** using sections 1 to 4. Apply the changes in
-   batches with `set_transactions_category`, one call per target category.
+   batches: `set_transactions_category` (one call per target category),
+   `set_transaction_ignore`, `set_transaction_date` and `set_transaction_notes`.
 4. **Leave transfers between your own accounts in `Venmo`** (ignored).
 5. **Verify.**
    - `Venmo` now holds only transfers between your own accounts.
@@ -167,8 +175,9 @@ which rule wins when two overlap.
 
 ## 7. Transaction dates: date each expense to when it happens
 
-> **Status: agreed, not implemented yet.** The MCP has no tool for changing a transaction's
-> date (see "Tooling needed" below).
+> **Status: in use.** `set_transaction_date(transaction_ids[], date)` changes the date;
+> `date: "original"` puts a transaction back on its posted date. Every transaction read
+> returns both dates, and `search_transactions` filters on either (`date_field`).
 
 A transaction's date in Rocket Money (`Date`) should be **the day the thing happens**, not
 the day it was bought. A flight bought in October for a trip in March is March spending.
@@ -239,10 +248,12 @@ If none of these settles it, leave the date alone and add the transaction note
 - **Example:** the Montauk Yacht Club deposit was charged 2026-07-23 and is dated
   2027-05-14, the check-in day.
 
-### Tooling needed before this can run
+### Tools
 
-- A `set_transaction_date(transaction_ids[], date)` write tool. Capture the edit-date
-  operation from the web app's transaction detail view.
-- `search_transactions`, `category_transactions` and `preview_rule` returning both `date`
-  and `original_date`.
-- A way to filter or search by either date (`since` / `until` on `date` or `original_date`).
+- `set_transaction_date(transaction_ids[], date)`: a batch, 50 per request. Use
+  `"original"` as the date to undo a change.
+- `date` and `original_date` on every row from `search_transactions`,
+  `category_transactions`, `preview_rule` and `get_rule`.
+- `search_transactions(since, until, date_field="date" | "original_date")`. Rocket Money
+  only filters on `date` itself, so `original_date` filtering finds transactions moved
+  later than their posted date but misses any moved earlier than `since`.

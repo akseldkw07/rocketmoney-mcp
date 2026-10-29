@@ -18,10 +18,7 @@ because it names people and amounts.
 3. `LOG.local.md`: the last few entries, for the date of the last run, open review items,
    and the rule-candidate tally (section 5).
 
-Parts of `CATEGORIZATION.md` are out of date about the tools. These all exist now:
-`set_transaction_date` (including `"original"`), `set_transaction_ignore`,
-`set_transaction_notes` (batched), `date` and `original_date` on every row,
-`since`/`until`/`date_field` and `cursor` on `search_transactions`, and `compact=true`.
+`CATEGORIZATION.md` lists the tools each step uses (§5 and §7).
 
 ## 1. Hard limits
 
