@@ -240,6 +240,10 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   identically. Re-capture the value from a logged-in `app.rocketmoney.com` tab
   (devtools -> Network -> filter `graphql` -> any request -> Request Headers) and
   set `ROCKETMONEY_WEB_CLIENT_VERSION`, or update the default in `src/rm/graphql.ts`.
+- `npm run check-rules` (read-only) checks rule precedence on real data: for every
+  transaction where two or more live rules set different categories, it reports
+  whether the category is the last rule's in `applied_rule_ids`, the first rule's, or
+  neither (likely a hand edit), with a few examples of each.
 - Not affiliated with or endorsed by Rocket Money / Rocket Companies.
 
 ## Known shortcomings
