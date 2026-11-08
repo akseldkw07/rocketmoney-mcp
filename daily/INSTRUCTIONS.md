@@ -41,7 +41,9 @@ because it names people and amounts.
   what was done and the error, then end the run.
 - **Don't change a transaction you've already decided,** that is one listed under fixes in
   an earlier log entry, unless new evidence shows the earlier call was wrong. If you do
-  change one, say so under fixes, giving the earlier entry's date.
+  change one, say so under fixes, giving the earlier entry's date. Exception: keeping its
+  note current (a receipt found later, a split requested or paid, §4b) is always allowed.
+- **Note-only writes don't count toward the 150 cap,** but at most 300 notes per run.
 
 ## 2. Collect
 
@@ -158,6 +160,9 @@ Work through these in order. Record a confidence for each: **high**, **medium** 
 | Duplicate import | Same name and amount on the same account, within 2 days, with a new id | Per §3 of `CATEGORIZATION.md`: newer copy → `Ignore`. Only when a whole stretch is doubled, never a single pair. |
 | Everything else | | Leave Rocket Money's category, unless it's clearly wrong (e.g. a restaurant in `Shopping`) |
 
+The notes this table names (`repays …`, `dated to …`, `proxy for …`) and `uncertain: …`
+below aren't whole notes: they go in the `changes` field of the transaction's note (§4b).
+
 **Confidence and what to do with it:**
 - **High:** a note or merchant that settles it, or an exact matching charge. Apply.
 - **Medium:** a best guess with real evidence. Apply, and add the note
@@ -169,7 +174,7 @@ Work through these in order. Record a confidence for each: **high**, **medium** 
 
 1. Apply in batches, one call per target: `set_transactions_category` per category,
    `set_transaction_ignore` per ignore state, `set_transaction_date` per date,
-   `set_transaction_notes` once with every note.
+   `set_transaction_notes` once with every note (the full merged note, §4b).
 2. Check each call's `updatedCount` (or per-item results) against what you sent. List any
    shortfall under MCP bugs.
 3. Re-read every changed transaction (`search_transactions`, or `preview_rule` /
@@ -200,7 +205,59 @@ goes under needs review instead. The note names the charge, e.g. `airbnb (homeco
 Oct 2026)`. Use `split_request` only when the whole split is known.
 
 Log each request under fixes made (change `Venmo request $X to <name>`). When it's paid,
-file the payment by purpose like any repayment.
+file the payment by purpose like any repayment. Either way, update the charge's `split`
+field (§4b) the same run.
+
+## 4b. Transaction notes
+
+Every transaction in the window gets a note in this format, on one line with ` | `
+between fields (one line, so it reads the same in the app and in `search_transactions`):
+
+```text
+receipt: <link or source> | split: <who and status>; my net $<amount> | changes: <what changed>
+```
+
+**Tools.** Notes are read from `search_transactions` / `category_transactions` (full rows,
+the `note` field) and written with `set_transaction_notes` (a batch; one `notes` entry per
+transaction) or `set_transaction_note` (one). A write **replaces** the whole note, so
+always build the new note from the current one:
+- Text already in the note that isn't in this format is mine. Keep it word for word,
+  first, followed by ` | ` and the fields.
+- Keep every field already filled in. Change one only to bring it up to date (a receipt
+  found, a request sent or paid), never to drop a fact.
+- Fields with nothing new to add stay as they are.
+
+**1. `receipt:`** where the proof of purchase is, in this order of preference:
+- **An email receipt:** search Gmail for the merchant near the date and amount (±3 days;
+  an order or booking confirmation counts). Link the message:
+  `https://mail.google.com/mail/u/0/#all/<message id>`.
+- **A digital receipt:** the merchant's order, trip or invoice page (Amazon order, Uber
+  trip, airline booking), from the email or the app.
+- **A conversation:** for money between people, the Venmo payment (`venmo <date> "<memo>"`)
+  or the iMessage or Splitwise thread that agrees it (`imessage <name> <YYYY-MM-DD>`).
+- `n/a` for transfers between my own accounts and card payments.
+- `none yet` if nothing turns up. Look again on later runs for 14 days after the
+  transaction (receipts and Splitwise entries arrive late), then write `none`.
+
+**2. `split:`** who shared it, and where the money stands:
+- `none` if it was only mine.
+- For a charge I paid for a group: each person, their share, and its status:
+  `not requested`, `requested <MM-DD>` (Venmo, §4a), `paid <MM-DD>`, or `owed (outside
+  Venmo)`. Then `my net $X`: the charge minus the others' shares.
+  Example: `split: Sam $40 paid 11-09, Alex $40 requested 11-08; my net $40`.
+- For an incoming repayment: `from <name> for <merchant> <YYYY-MM-DD>`. Also update that
+  charge's split field to `paid`.
+- For a charge someone else paid that I paid back: `I owed <name> $X; paid <MM-DD>`.
+
+**3. `changes:`** what was done to it, and by what:
+- Each change the run made, with the old value: `category Dining -> Groceries`, `ignore
+  none -> everything`, `date 10-02 -> 10-15 (dated to <event>)`, plus the §3 notes
+  (`repays …`, `proxy for …`) and `uncertain: <why>` at medium confidence.
+- A rule that set it: `rule "<name>" (<id>)`, from the row's `applied_rule_ids` matched
+  against `list_rules`. A rule overwrites a hand-set field when it re-runs, so this tells
+  the next run why a value came back.
+- `none (RM's category kept)` when nothing changed.
+- End the field with `(daily <YYYY-MM-DD>)`, the run that last changed it.
 
 ## 5. Spot patterns and propose rules
 
