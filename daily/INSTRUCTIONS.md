@@ -217,6 +217,9 @@ between fields (one line, so it reads the same in the app and in `search_transac
 receipt: <link or source> | split: <who and status>; my net $<amount> | changes: <what changed>
 ```
 
+The three fields always appear, in that order. Optional fields (4 to 7 below) follow them
+only when they apply, in this order, so a note never carries an empty `for:` or `refund:`.
+
 **Tools.** Notes are read from `search_transactions` / `category_transactions` (full rows,
 the `note` field) and written with `set_transaction_notes` (a batch; one `notes` entry per
 transaction) or `set_transaction_note` (one). A write **replaces** the whole note, so
@@ -258,6 +261,34 @@ always build the new note from the current one:
   the next run why a value came back.
 - `none (RM's category kept)` when nothing changed.
 - End the field with `(daily <YYYY-MM-DD>)`, the run that last changed it.
+
+**4. `for:`** (optional) the trip, event or person it was for, e.g. `for: homecoming
+trip` or `for: Sam's birthday`. Use the same name for every transaction of one trip or
+event, so they can be found together with `search_transactions` on the note text. Take
+the name from a booking email, calendar event, Splitwise group or earlier notes; don't
+invent one.
+
+**5. `refund:`** (optional) on a charge that was returned or refunded:
+`refund: $X <MM-DD>` (partial or full), linking the refund row the same way the
+repayment link works (the refund's own note gets `refund: of <merchant> <YYYY-MM-DD>`).
+For a purchase that can still be returned, `return by <YYYY-MM-DD>` when the receipt
+or order page states a window. Flag under needs review when a return-by date is within
+7 days and nothing shows it was returned.
+
+**6. `reimbursable:`** (optional) a work or other expense someone will pay back that
+isn't a Venmo split: `reimbursable: <who> - not submitted | submitted <MM-DD> | paid
+<MM-DD>`. Only when an email, note or message says so; never guess that a charge is a
+work expense. When the reimbursement arrives, file it like a repayment and mark it paid.
+
+**7. `warranty:`** (optional) for purchases of $200 or more with a stated warranty:
+`warranty: until <YYYY-MM-DD> (<length>, <maker or retailer>)`, from the receipt, order
+page or product email. Together with the receipt link it's everything a claim needs.
+Leave it out when no warranty is stated.
+
+Full example:
+`receipt: https://mail.google.com/mail/u/0/#all/18f… | split: Sam $40 paid 11-09; my net
+$80 | changes: category Shopping -> Travel (daily 2026-11-08) | for: homecoming trip |
+return by 2026-12-01`
 
 ## 5. Spot patterns and propose rules
 
