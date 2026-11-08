@@ -53,7 +53,21 @@ export async function accountLabelsOrIds() {
         };
     }
 }
-const accountOf = (t, labels) => t.accountId ? (labels.get(t.accountId) ?? t.accountId) : null;
+/**
+ * The account a row names. AccountLabels lists enabled accounts only, but a
+ * switched-off account keeps its history, so its transactions still turn up
+ * (F11). Such an id is labeled "(switched off) <id>": readable, and the id is
+ * still there to pass to account_ids. An empty map means the names couldn't be
+ * read at all (accountLabelsOrIds already warns), so rows keep plain ids.
+ */
+const accountOf = (t, labels) => {
+    if (!t.accountId)
+        return null;
+    const label = labels.get(t.accountId);
+    if (label)
+        return label;
+    return labels.size ? `(switched off) ${t.accountId}` : t.accountId;
+};
 /**
  * One transaction row, the same shape everywhere transactions are listed.
  * Empty fields are left out rather than sent as null/[]; on a large pull they

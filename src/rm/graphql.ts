@@ -15,8 +15,17 @@ import { attemptLogin, autoLoginConfigured, type LoginResult } from "./login.js"
 import { QUERY_TEXT } from "./query-text.js";
 
 const GRAPHQL_URL = "https://client-api.rocketmoney.com/graphql";
-// Captured from the web app. The exact value doesn't gate persisted-query
-// resolution (hashes survive client-version bumps) but RM expects the header.
+// Captured from the web app. Persisted-query hashes survive client-version
+// bumps, but Rocket Money rejects a sufficiently stale value outright: every
+// call fails with `HTTP 401 on AuthenticationCheck`, including a brand-new
+// cookie. The giveaway is that several different fresh cookies all fail the
+// same way: that is this header, not the session.
+//
+// Re-capture: open a logged-in app.rocketmoney.com tab -> DevTools -> Network
+// -> filter "graphql" -> click a request -> Request Headers ->
+// x-truebill-web-client-version. Override without editing this file by setting
+// ROCKETMONEY_WEB_CLIENT_VERSION. (Upstream 312-dev#6 saw 3a3590f35c live on
+// 2026-10-08; 2fc82a9db6 still worked here on 2026-11-02, so it stays.)
 const WEB_CLIENT_VERSION = process.env.ROCKETMONEY_WEB_CLIENT_VERSION ?? "2fc82a9db6";
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
