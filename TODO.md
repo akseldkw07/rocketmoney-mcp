@@ -244,8 +244,9 @@ then A2-A4 (need the rotation investigation and more care), then E.
       set different categories, compares its actual category with the last and first rule
       in `applied_rule_ids`. Reports counts and examples (and "neither" as likely hand
       edits). The one-off version ran on 2026-10-29 with no conflicts found. *Added
-      2026-11-08 (`scripts/check-rules.ts`); the analysis is unit-tested, the live run
-      not yet tried.*
+      2026-11-08 (`scripts/check-rules.ts`). Live run 2026-11-08: 9,136 transactions,
+      23 rules, no conflicts, so precedence is still unjudged. It finds the server's
+      session by itself (Fly volume, else the Mac's launchd folder).*
 - [ ] **F8. `/api/transactions` rows still use the old shape** (no `original_date`,
       `ignore`, `account`; nulls included). Switch to the shared `rows.ts` shape once the
       card gate on lockbox is updated to accept it; that's the one consumer.

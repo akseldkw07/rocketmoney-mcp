@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkRulePrecedence, formatReport } from "../scripts/check-rules.js";
+import { checkRulePrecedence, formatReport, stateDir } from "../scripts/check-rules.js";
 
 type Rule = Parameters<typeof checkRulePrecedence>[0][number];
 type Txn = Parameters<typeof checkRulePrecedence>[1][number];
@@ -76,4 +76,16 @@ test("formatReport gives counts, the verdict and a few examples per class", () =
   assert.doesNotMatch(out, /t5 /); // examples capped at 5
   assert.match(out, /… and 2 more/);
   assert.match(out, /r1=Dining, r2=Groceries/);
+});
+
+test("stateDir: an explicit ROCKETMONEY_STATE_DIR wins", () => {
+  const exists = () => true;
+  assert.equal(stateDir({ ROCKETMONEY_STATE_DIR: "/x" }, "/Users/me", exists), "/x");
+});
+
+test("stateDir: the Fly volume when it exists, else the Mac's launchd folder", () => {
+  const mac = "/Users/me/Library/Application Support/rocketmoney-mcp";
+  assert.equal(stateDir({}, "/Users/me", (p) => p === "/data/rocketmoney" || p === mac), "/data/rocketmoney");
+  assert.equal(stateDir({}, "/Users/me", (p) => p === mac), mac);
+  assert.equal(stateDir({}, "/Users/me", () => false), undefined);
 });
