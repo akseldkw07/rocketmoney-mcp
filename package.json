@@ -27,8 +27,8 @@
     "mcp-utils": "github:akseldkw07/mcp-utils#v0.1.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "rebrowser-puppeteer-core": "^24.8.1",
-    "zod": "^3.23.8"
+    "rebrowser-puppeteer-core": "^25.16.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
