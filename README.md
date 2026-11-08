@@ -234,6 +234,10 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   `src/rm/client.ts`. `npm run refresh-hashes -- --bundle` regenerates the fallback
   query text from the public bundle (no login needed). Transaction-rule tools and all
   writes send their own query text, so they never depend on a hash.
+- `npm run check-rules` (read-only) checks rule precedence on real data: for every
+  transaction where two or more live rules set different categories, it reports
+  whether the category is the last rule's in `applied_rule_ids`, the first rule's, or
+  neither (likely a hand edit), with a few examples of each.
 - Not affiliated with or endorsed by Rocket Money / Rocket Companies.
 
 ## Known shortcomings

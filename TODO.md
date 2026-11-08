@@ -239,11 +239,13 @@ then A2-A4 (need the rotation investigation and more care), then E.
 
 ## Follow-ups (open)
 
-- [ ] **F7. `npm run check-rules`: rule precedence consistency check.** Read-only: lists
+- [x] **F7. `npm run check-rules`: rule precedence consistency check.** Read-only: lists
       rules and all transactions, then for every transaction where two or more live rules
       set different categories, compares its actual category with the last and first rule
       in `applied_rule_ids`. Reports counts and examples (and "neither" as likely hand
-      edits). The one-off version ran on 2026-10-29 with no conflicts found.
+      edits). The one-off version ran on 2026-10-29 with no conflicts found. *Added
+      2026-11-08 (`scripts/check-rules.ts`); the analysis is unit-tested, the live run
+      not yet tried.*
 - [ ] **F8. `/api/transactions` rows still use the old shape** (no `original_date`,
       `ignore`, `account`; nulls included). Switch to the shared `rows.ts` shape once the
       card gate on lockbox is updated to accept it; that's the one consumer.
