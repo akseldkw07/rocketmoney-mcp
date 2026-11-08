@@ -6,6 +6,9 @@
 // more live rules set different categories, checks whether its category is the last
 // rule's in applied_rule_ids, the first rule's, or neither (likely a hand edit).
 
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RMRule } from "../src/rm/rules.js";
 import type { RMTransaction } from "../src/rm/transactions.js";
@@ -71,7 +74,24 @@ export function formatReport(r: RuleCheck, max = 5): string {
   ].join("\n");
 }
 
+/**
+ * Where the server keeps its session, so the script can borrow it: an explicit
+ * ROCKETMONEY_STATE_DIR, else the Fly volume, else the folder the Mac's launchd
+ * plist uses. undefined leaves session.ts on its own default.
+ */
+export function stateDir(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  exists: (path: string) => boolean,
+): string | undefined {
+  if (env.ROCKETMONEY_STATE_DIR) return env.ROCKETMONEY_STATE_DIR;
+  const candidates = ["/data/rocketmoney", join(home, "Library", "Application Support", "rocketmoney-mcp")];
+  return candidates.find(exists);
+}
+
 async function main(): Promise<void> {
+  const dir = stateDir(process.env, homedir(), existsSync);
+  if (dir) process.env.ROCKETMONEY_STATE_DIR = dir;
   const { listRules } = await import("../src/rm/rules.js");
   const { searchAllTransactions } = await import("../src/rm/transactions.js");
   const rules = await listRules();
