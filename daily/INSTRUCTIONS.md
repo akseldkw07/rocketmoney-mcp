@@ -316,3 +316,14 @@ weren't changed, open questions for me.)
 Then reply with a summary: the cash-flow result first (and the amount to move into
 checking, if any), what changed (counts and dollars per category), everything
 needing review, and any rule or MCP issue.
+
+## Browser cleanup (Aksel's standing rule for all repeat tasks)
+
+Browser choice: prefer the built-in browser (mcp__remote-devices__Claude_Browser__* tools) over Claude in Chrome; every Claude-in-Chrome session leaves a saved "Claude" tab group behind in Aksel's Chrome.
+
+Before finishing — including after any error:
+
+1. Close every browser tab this run opened: each built-in browser tab (Claude_Browser tabs_context, then tabs_close each tab) and, if Claude in Chrome was used at all, every tab in its Claude tab group (tabs_close_mcp each, so the group disappears) plus any window made for it.
+2. Remove stale Claude-created Chrome tab groups left by earlier runs, if the Mac is reachable. Use the "Control your Mac" osascript tool (mcp__remote-devices__Control_your_Mac__osascript) with System Events UI scripting on process "Google Chrome": find the AXToolbar whose description is "Saved Tab Groups" (inside the Bookmarks toolbar of the standard window). For each button whose description contains "Claude group - Closed" (or starts with the hourglass emoji + Claude), perform action "AXShowMenu" on it, wait ~1 s, find the window with subrole "AXUnknown" and click its menu item titled "Delete group". Repeat until none remain. Also close any open Chrome tab at chrome://newtab/ that sits inside a group named "Claude" (or this task's own group name). If osascript lacks Accessibility permission, skip this step and say so.
+3. Never touch groups with other names (Aksel's own groups) and never close Aksel's own tabs or windows.
+4. State in the report: tabs closed, and how many stale Claude tab groups were deleted.
