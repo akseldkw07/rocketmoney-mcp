@@ -5,7 +5,8 @@ import { z } from "zod";
 import { RMAuthError } from "../rm/client.js";
 
 export const AUTH_HINT =
-  "Rocket Money session is not active. Open this server's /auth page and paste a fresh `tb.auth0.sid` cookie from a logged-in app.rocketmoney.com browser tab.";
+  "Rocket Money session is not active. Open this server's /auth page and paste a fresh `tb.auth0.sid` cookie from a logged-in app.rocketmoney.com browser tab. " +
+  "If a freshly pasted cookie still fails with `HTTP 401 on AuthenticationCheck`, suspect a stale x-truebill-web-client-version instead: re-capture it from a graphql request in DevTools and set ROCKETMONEY_WEB_CLIENT_VERSION.";
 
 /** With ROCKETMONEY_READ_ONLY=1 the write tools are never registered, so a client cannot reach them. */
 export const READ_ONLY = /^(1|true|yes)$/i.test(process.env.ROCKETMONEY_READ_ONLY ?? "");
