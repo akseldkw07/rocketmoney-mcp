@@ -25,9 +25,11 @@ because it names people and amounts.
 - **Venmo: reads, and requests for money I'm owed.** Reads: `get_transactions`,
   `get_outgoing_requests`, `get_pending_requests`, `get_friends`, `lookup_user`,
   `search_users`, `get_my_profile`. Requesting money (`request_money`, `split_request`) is
-  allowed, under section 4a. Never call `send_money`, `complete_request`, `deny_request`,
-  `cancel_request` or `remind_request`: nothing that pays, or that changes a request
-  someone else made.
+  allowed, under sections 4a and 4c. Never call `send_money`, `complete_request`,
+  `deny_request`, `cancel_request` or `remind_request`: nothing that pays, or that changes
+  a request someone else made.
+- **Venmo groups, through iPhone screen mirroring: add expenses only, under section 4c.**
+  Never edit or delete an expense, settle up, pay, or change a group's members.
 - **Rocket Money writes allowed:** `set_transactions_category`, `set_transaction_ignore`,
   `set_transaction_notes`, `set_transaction_date`, and rule writes only under section 6.
   Never call `delete_category`, `update_category`, `update_subscription`,
@@ -294,6 +296,53 @@ Full example:
 `receipt: https://mail.google.com/mail/u/0/#all/18f… | split: Sam $40 paid 11-09; my net
 $80 | changes: category Shopping -> Travel (daily 2026-11-08) | for: homecoming trip |
 return by 2026-12-01`
+
+## 4c. First of the month: recurring requests and shared bills
+
+Runs once a month: on the first run on or after the 1st whose month has no
+`### First of the month` section in `LOG.local.md` yet (so a skipped day still runs it,
+and a second run the same month doesn't repeat it). The people, amounts and group names
+are in `../CATEGORIZATION.local.md` under "Monthly requests and shared bills".
+
+**1. Recurring Venmo requests.** For each row of the "Monthly requests" table:
+- **Already done?** Skip it if `get_outgoing_requests` has an open request to that person
+  with this month's note, or `get_transactions(with_user_id=…, note_contains=…)` shows
+  that note paid or requested already. Notes follow the table's pattern, so the check is
+  exact.
+- **Amount.** Only from the source the table names (a bill's line item, a fixed amount).
+  Never estimate it and never reuse last month's amount as a stand-in. If the source
+  can't be read, don't request: add a review item and push "Can't read <bill> for
+  <person>'s request; last month was $X, bill total $Y". Repeat each run until it's sent.
+- **Send** with `request_money` (private), the friend id from `get_friends`, and the
+  table's note. These count toward §4a's limit of 3 requests per run; the $500 cap and the
+  friend check apply too. On the Rocket Money side, the bill's note gets
+  `split: <person> $X requested <MM-DD>` (§4b), and the payment, when it arrives, is
+  filed like any repayment (§3).
+
+**2. Shared household bills to a Venmo group.** For each bill in the "Shared bills" table:
+- **Find last month's charge** in Rocket Money (`search_transactions(query=<name on
+  account>, since=<first of last month>)`). None yet: say so in the log, nothing else.
+- **Already added?** Check the group's expense list, the local file's itemized list for
+  the group, and the charge's note (`split:` field). Any one of them showing it means skip.
+- **Is the phone reachable?** Venmo's API has no group expenses; they're only reachable in
+  the Venmo app on the iPhone, through macOS iPhone Mirroring (the `mirroir` and
+  `iphone-mirror` MCP servers). Check first with `mirroir`'s `status` / `check_health` and
+  a `screenshot`: it works only while the iPhone is connected and the Mirroring window
+  shows the phone (not a "connect your iPhone" or locked screen). If it's not reachable,
+  or those tools aren't loaded in this run, don't try anything else: add a review item and
+  push "Add <bill> <Month> $X to <group>: iPhone mirroring isn't connected". Repeat each
+  run until it's done or I say it's handled.
+- **Add it** when reachable: Venmo app → Groups → <group> → add an expense, named as the
+  table says (e.g. `<Bill> <Month>`), the exact charge amount, paid by me, split equally
+  among the members listed. Before confirming, take a screenshot and check name, amount,
+  payer and split. After confirming, check it appears in the group's expense list.
+- **Record it:** append a row to the local itemized list for the group, set the charge's
+  note `split:` field (`<group>: <names> $X each, added <MM-DD>; my net $Y`), and list it
+  under fixes made. At most 2 expenses per month, only the bills in the table, only
+  charges I paid. Anything else that looks shared goes under needs review.
+
+Log both parts under a `### First of the month` heading in that day's entry (§7): each
+request or expense sent, skipped (and why) or blocked.
 
 ## 5. Spot patterns and propose rules
 
