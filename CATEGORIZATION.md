@@ -205,6 +205,7 @@ shows both), so changing `Date` doesn't lose the purchase date.
 | A refund or cancellation, full or partial | The same date as the charge it reverses |
 | A repayment from someone else (section 1) | The same date as the charge it repays, so the netting lands in the same month |
 | A repayment that settles several charges at once (a Splitwise settle-up) | The date of the largest charge it covers; if it's unclear, leave it alone |
+| A payment I sent for my share of someone else's charge (they paid, I Venmo or Zelle my part later) | The date of what it paid for: the meal, the groceries, the ride. For a share of a trip or event, the trip and event rows above apply (check-in, event date). Find the date in the payment memo, the Splitwise entry or the message thread. Note `my share of <what> <YYYY-MM-DD>` |
 | A pass-through (paid entirely for someone else) | Both sides to the date of the thing bought |
 | Everyday spending (food, rides, shopping, bills, subscriptions, annual fees) | Leave as charged |
 
@@ -214,6 +215,14 @@ shows both), so changing `Date` doesn't lose the purchase date.
   it a few days within the same month changes nothing that matters.
 - **Only change it once the date it happens is known.** For a booking not yet made, or an
   open date (a flexible ticket, a voucher), leave it alone.
+- **Change a date once.** If a transaction's `date` already differs from its
+  `original_date`, or its note already says why it was moved (`dated to …`, `repays …`,
+  `my share of …`), it has been handled: leave it, even if this run would pick a
+  slightly different date. Change it again only on new evidence that the date is wrong
+  (the trip moved, the wrong charge was matched), and say so in the run's report with the
+  old and new dates. To undo a move, use `date: "original"`.
+- **One side per pair.** Re-date the repayment, or my share, to the charge's date. Never
+  move the charge to meet it.
 - **If the trip moves,** move the dates of all its transactions to the new date. If it's
   cancelled, the refund goes to the original charge's date (so both net in the same month),
   and any non-refundable part stays on the date the trip would have started.
