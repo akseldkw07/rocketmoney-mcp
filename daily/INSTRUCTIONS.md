@@ -153,15 +153,20 @@ Work through these in order. Record a confidence for each: **high**, **medium** 
 | --- | --- | --- |
 | Transfer between my own accounts | The rows in `CATEGORIZATION.md` §2 (`Standard transfer`, `VENMO CASHOUT`, `VENMO PAYMENT`), credit card payments, moves between my own bank or brokerage accounts | Category `Venmo` for the Venmo-related ones; everything else keeps Rocket Money's transfer or payment category. `ignore: everything` in both cases. |
 | Repayment of a group bill | Incoming Venmo or Zelle whose amount is the charge divided by N, or a round share of it, near a charge of mine; or a note naming it (`airbnb`, `dinner`, `… group split`) | The charge's category (§1). If the charge is in a different month, also re-date the repayment to the charge's date (§7). Note: `repays <merchant> <YYYY-MM-DD>` |
-| Payment to a person | Outgoing Venmo or Zelle | Category by purpose, from the note (§4) |
+| Payment to a person | Outgoing Venmo or Zelle | Category by purpose, from the note (§4). If it's my share of something someone else paid for, also re-date it to the date of that thing when it's in a different month (§7.1, "my share"). Note: `my share of <what> <YYYY-MM-DD>` |
 | New bill | A charge from a utility, telecom, insurer, rent, a subscription, or anything `subscriptions` / `upcoming_bills` / the "Recurring subscriptions" table in `../CATEGORIZATION.local.md` lists, that isn't in its usual category | Its usual category: the one past charges from the same merchant use (`search_transactions(query=<merchant>)`). For a merchant with no history, the category from the merchant type (`Bills & Utilities`, a subscription category, `Rent`). |
 | Future trip or event purchase | Flights, lodging, tickets, tours, booked ahead | Re-date per §7 when the event date is known (Gmail confirmations if available). Note: `dated to <event> <YYYY-MM-DD>` |
 | Payment to a card that isn't syncing | A payment from checking to a card that `CATEGORIZATION.local.md` lists as disconnected | Its purchases never arrive, so the payment stands in for them: `Shopping` (or the card's usual category), ignore `none`, note `proxy for <card> purchases (disconnected since <date>)`. If the card reconnects with history, revert the payments the history covers to `Credit Card Payment` + `ignore: everything`. |
 | Duplicate import | Same name and amount on the same account, within 2 days, with a new id | Per §3 of `CATEGORIZATION.md`: newer copy → `Ignore`. Only when a whole stretch is doubled, never a single pair. |
 | Everything else | | Leave Rocket Money's category, unless it's clearly wrong (e.g. a restaurant in `Shopping`) |
 
-The notes this table names (`repays …`, `dated to …`, `proxy for …`) and `uncertain: …`
-below aren't whole notes: they go in the `changes` field of the transaction's note (§4b).
+The notes this table names (`repays …`, `dated to …`, `my share of …`, `proxy for …`) and
+`uncertain: …` below aren't whole notes: they go in the `changes` field of the
+transaction's note (§4b).
+
+Every re-date follows `CATEGORIZATION.md` §7.2, including "change a date once": skip a
+transaction whose `date` already differs from its `original_date`, or whose note already
+gives the reason. Re-date the repayment or my share, never the charge it matches.
 
 **Confidence and what to do with it:**
 - **High:** a note or merchant that settles it, or an exact matching charge. Apply.
