@@ -206,7 +206,8 @@ ROCKETMONEY_STATE_DIR=./.state PORT=8080 node dist/index.js
 | `PORT` | `8080` | HTTP port |
 | `ROCKETMONEY_STATE_DIR` | `/data/rocketmoney` | Where the rotating session is persisted |
 | `ROCKETMONEY_READ_ONLY` | unset | `1` to leave the write tools unregistered |
-| `ROCKETMONEY_KEEPALIVE_MS` | `7200000` | Keepalive interval (2h; the launchd plist uses 30 min) |
+| `ROCKETMONEY_KEEPALIVE_MS` | `600000` | Keepalive interval (10 min; the launchd plist sets the same) |
+| `ROCKETMONEY_LOG_TIMESTAMPS` | on | `0` to leave log lines unstamped (each line starts with a UTC ISO time otherwise) |
 | `ROCKETMONEY_AUTO_LOGIN` | unset | `1` to re-login automatically when the session dies |
 | `ROCKETMONEY_EMAIL` / `ROCKETMONEY_PASSWORD` | unset | Login credentials for auto-login (`start.sh` reads them from the Keychain) |
 | `ROCKETMONEY_LOGIN_HEADLESS` | `0` | Auto-login browser: `0` headful (needed on Fly), `auto` headless with a headful fallback, `1` headless only |
@@ -236,7 +237,7 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   `PersistedQueryNotFound ... Falling back`. To fix the hash properly, open the page
   the log line names with devtools recording, export a HAR, and run
   `npm run refresh-hashes -- <file.har>`, which rewrites `PERSISTED` in
-  `src/rm/client.ts`. `npm run refresh-hashes -- --bundle` regenerates the fallback
+  `src/rm/graphql.ts`. `npm run refresh-hashes -- --bundle` regenerates the fallback
   query text from the public bundle (no login needed). Transaction-rule tools and all
   writes send their own query text, so they never depend on a hash.
 - If **every** call returns `HTTP 401 on AuthenticationCheck`, including with a
@@ -249,6 +250,12 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   transaction where two or more live rules set different categories, it reports
   whether the category is the last rule's in `applied_rule_ids`, the first rule's, or
   neither (likely a hand edit), with a few examples of each.
+- **Tool changes don't reach existing chats.** A conversation that already loaded a
+  tool keeps the definition it loaded, even after Claude Desktop restarts or the server
+  redeploys; only tools it hadn't loaded yet come through new. After a deploy that
+  changes a tool's parameters, start a new conversation (Claude Code: `/mcp` ->
+  reconnect, then a new session). Seen 2026-10-29: the server served the new
+  `search_transactions` while an existing chat still saw the old one.
 - Not affiliated with or endorsed by Rocket Money / Rocket Companies.
 
 ## Known shortcomings
@@ -265,26 +272,14 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   until Rocket Money changes the schema itself; refreshing the hashes is a HAR capture
   plus `npm run refresh-hashes` (see Notes).
 - **Subscriptions can't be marked cancelled** through the API (see above), only deleted.
-- **Logs have no timestamps**; `login-last.json` is the only timestamped record of a
-  login run.
-- **No CI.** Tests (`npm test`) and the typecheck only run locally.
+- **No CI.** Tests (`npm test`) and the typecheck only run locally: the `mcp-utils`
+  dependency is a private repo, so a GitHub Actions run can't install it without a
+  token (see TODO.md).
 - **USD only.**
 
 ## TODO
 
-- [ ] Decide on `feat/generic-transaction-writes`: its 2026-10-27 hash fix is now in
-      `main`; its gate-note write endpoint (with a test) is not, and it conflicts with
-      the current `client.ts` / `index.ts`.
-- [ ] Apply the dependency bumps upstream's Dependabot proposed (notably MCP SDK
-      1.32.0; the copied branches were deleted from this fork), and consider turning
-      Dependabot on for this fork.
-- [ ] Remove `extension/`, or bring back `/auth/ingest` behind authentication.
-- [ ] Timestamp the server log.
-- [ ] Add CI for `npm test` and `npm run typecheck`.
-- [ ] Treat timeouts and connection resets that come from local network trouble as
-      offline, without hiding real Rocket Money failures.
-- [ ] Capture the HAR for `npm run refresh-hashes` automatically (e.g. from a
-      headless page load) instead of by hand.
+Open work is tracked in [TODO.md](TODO.md).
 
 ## License
 

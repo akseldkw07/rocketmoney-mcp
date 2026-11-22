@@ -6,6 +6,11 @@ import { refreshAuthToken } from "./rm/client.js";
 import { sessionStatus } from "./rm/session.js";
 import { attemptLogin, autoLoginConfigured } from "./rm/login.js";
 import { newTransactions, budgetSnapshot, requireToken } from "./api.js";
+import { installTimestamps } from "./log.js";
+
+// Stamp every log line with the time (launchd's server.log has none of its own).
+// ROCKETMONEY_LOG_TIMESTAMPS=0 turns it off, e.g. where the host stamps lines already.
+if (!/^(0|false|no)$/i.test(process.env.ROCKETMONEY_LOG_TIMESTAMPS ?? "")) installTimestamps();
 
 const PORT = Number(process.env.PORT ?? 8080);
 
