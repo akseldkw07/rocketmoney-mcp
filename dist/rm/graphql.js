@@ -1,12 +1,10 @@
 // The Rocket Money GraphQL transport: request headers, the executor (concurrency
-// limit, re-login, persisted-query fallback), errors, Relay ids, batching and
-// paging. Every other rm/ module talks to Rocket Money through this one.
+// limit, re-login), errors, Relay ids, batching and paging. Every other rm/ module talks to Rocket Money through this one.
 import { applySetCookies, loadSession, markSessionDead, parseCookieHeader, saveSession, serializeJar, } from "./session.js";
 import { attemptLogin, autoLoginConfigured } from "./login.js"; // circular; runtime-only use
 import { QUERY_TEXT } from "./query-text.js";
 const GRAPHQL_URL = "https://client-api.rocketmoney.com/graphql";
-// Captured from the web app. Persisted-query hashes survive client-version
-// bumps, but Rocket Money rejects a sufficiently stale value outright: every
+// Captured from the web app. Rocket Money rejects a sufficiently stale value outright: every
 // call fails with `HTTP 401 on AuthenticationCheck`, including a brand-new
 // cookie. The giveaway is that several different fresh cookies all fail the
 // same way: that is this header, not the session.
@@ -18,61 +16,6 @@ const GRAPHQL_URL = "https://client-api.rocketmoney.com/graphql";
 // 2026-10-08; 2fc82a9db6 still worked here on 2026-11-02, so it stays.)
 const WEB_CLIENT_VERSION = process.env.ROCKETMONEY_WEB_CLIENT_VERSION ?? "2fc82a9db6";
 const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
-// Persisted-query hashes for the READ operations, lifted from the web app's own
-// traffic. The baseline came from app.rocketmoney.com-2.har (2026-07-05).
-//
-// A hash belongs to one build of the Rocket Money web bundle, so RM invalidates
-// some of them every few weeks and the fix is always the same: load the page in
-// CAPTURE_PAGE with devtools recording, find the POST whose operationName
-// matches, and copy extensions.persistedQuery.sha256Hash. Re-captured 2026-09-13:
-// AccountDetailAccountListPage, which replaces the retired SettingsAccountsPage
-// (RM no longer answers that operation at all), and AccountDetailPage.
-// SubscriptionDetailPage added 2026-09-13 from recurring.har; RecurringPage's
-// hash was unchanged in that same capture.
-//
-// A hash can also be recomputed without a login, because every query document
-// ships in the public bundle (pages/_app-*.js): the web client sends
-// sha256(print(formatDocument(doc))), formatDocument being urql's pass that adds
-// __typename. Re-derived that way 2026-10-27 for AccountDetailAccountListPage,
-// AccountDetailPage, SpendingPage, Budgets, RecurringPage and
-// TransactionCategoryPage; the same computation reproduced every hash left
-// unchanged, which is what showed it matches the client. (Rerun against the
-// 2026-10-29 bundle, it reproduced only two of six changed hashes, so treat a
-// computed hash as a guess until a request with it succeeds.)
-//
-// To update from a capture: `npm run refresh-hashes -- <file.har>` rewrites the
-// entries below from every operationName -> sha256Hash pair in the HAR. A stale
-// hash no longer breaks a tool in the meantime: rmGraphQL falls back to the
-// query text in QUERY_TEXT (`npm run refresh-hashes -- --bundle` regenerates it).
-const PERSISTED = {
-    AuthenticationCheck: "5fe578b1917c4601cb63948f580ad3bdadded0fefa985fdd2fe2d1b913cce2d0",
-    RefreshAuthToken: "a86bd0f5e3fbc3673d1215b894362c5cd28ce060a7bb326cc9fd37b06bdd9fbb",
-    AccountDetailAccountListPage: "a9a8e1b8f1514189f262e2952d57430bd56882ce1d903817e7b4e863b3bd7b9f",
-    AccountDetailPage: "353069c04c1778a074ae9aee8398d4286a0f26d75cb1c933d17fb1ce18d2dfdf",
-    NetWorthQuery: "5d319beb9e4b601c8381198731cbdaeeba106e442c44c049e4333142db07ed11",
-    SpendingPage: "a03fc1d90df2029a330da832e2b389478e23f7318f6cfb15ef1403878a607eb7",
-    Budgets: "1f4b783aa7075191469478205ec55825ca2a37f1b8de21d11080d08dc8a0096b",
-    RecurringPage: "0026a77fc626a68877701731ac1269584c9b57881283dcaa0923372163668e1c",
-    SubscriptionDetailPage: "9556941e4ff9bdc23d43801774a45e8dc01b67b547aab774abcd9815bb5b0f3c",
-    RecurringUpcomingPage: "f1dd34f01b69dd0367a8b20a07b8b45977ab6d1ce0d31919b1b4143e5ba205bc",
-    // The user's full category catalog (default + custom), with node ids. Captured
-    // from app.rocketmoney.com.har (2026-07-05). Read-only; rotating is handled the
-    // same as any other persisted read (PersistedQueryNotFound -> re-capture).
-    TransactionCategories: "b8734a0ec18579870ec0e707beca2a05450193c99e55df6f165be9d18a53e6b4",
-};
-// Where in the web app each operation fires, so the PersistedQueryNotFound error
-// can send you straight to the page that will hand you the new hash. Only routes
-// actually observed in a capture are listed; add one the next time you watch an
-// operation go past rather than guessing it from the operation name.
-const CAPTURE_PAGE = {
-    AuthenticationCheck: "https://app.rocketmoney.com/ (fires on every page)",
-    RefreshAuthToken: "https://app.rocketmoney.com/ (fires on every page)",
-    AccountDetailAccountListPage: "https://app.rocketmoney.com/account",
-    AccountDetailPage: "https://app.rocketmoney.com/account (then click an account)",
-    NetWorthQuery: "https://app.rocketmoney.com/net-worth",
-    RecurringPage: "https://app.rocketmoney.com/recurring",
-    SubscriptionDetailPage: "https://app.rocketmoney.com/recurring (then click a subscription)",
-};
 /** The headers every RM GraphQL request carries, as the web app sends them. */
 function rmHeaders(jar) {
     return {
@@ -87,9 +30,6 @@ function rmHeaders(jar) {
 }
 /** Thrown when the session is no longer authenticated (cookie expired/revoked). */
 export class RMAuthError extends Error {
-}
-/** Thrown when RM no longer recognizes a persisted-query hash. */
-export class PersistedQueryNotFoundError extends Error {
 }
 /** A GraphQL-level failure. Carries whatever data came back, so a batch can keep its partial results. */
 export class RMGraphQLError extends Error {
@@ -233,13 +173,6 @@ async function rmExecuteUnlocked(opName, payload) {
             sessionDied(`GraphQL: ${authErr.message}`);
             throw new RMAuthError(`Rocket Money auth failed: ${authErr.message}. Re-auth at /auth.`);
         }
-        if (json.errors.some((e) => /PersistedQueryNotFound/i.test(e.message))) {
-            const page = CAPTURE_PAGE[opName] ??
-                "the Rocket Money web app page that shows this data";
-            throw new PersistedQueryNotFoundError(`RM ${opName}: PersistedQueryNotFound - Rocket Money rotated this query hash. ` +
-                `To fix: load ${page} with devtools recording, export a HAR, and run ` +
-                `\`npm run refresh-hashes -- <file.har>\` (it rewrites PERSISTED in src/rm/graphql.ts).`);
-        }
         throw new RMGraphQLError(`RM ${opName}: ${json.errors.map((e) => e.message).join("; ")}`, json.data, json.errors);
     }
     // Healthy authenticated response - commit any rotated cookies onto the LATEST
@@ -267,7 +200,7 @@ export async function probeSession(cookieHeader) {
             body: JSON.stringify({
                 operationName: "AuthenticationCheck",
                 variables: {},
-                extensions: { persistedQuery: { version: 1, sha256Hash: PERSISTED.AuthenticationCheck } },
+                query: readText("AuthenticationCheck"),
             }),
             redirect: "manual",
         });
@@ -286,39 +219,38 @@ export async function probeSession(cookieHeader) {
         return null;
     }
 }
-// Ops already warned about, so a rotated hash logs once per process, not per call.
-const fellBack = new Set();
+/** The bundled query text for a read; a missing one is a build problem, so say how to fix it. */
+function readText(op) {
+    const text = QUERY_TEXT[op];
+    if (!text)
+        throw new Error(`No query text for ${op} in src/rm/query-text.ts: run \`npm run refresh-query-text\`.`);
+    return text;
+}
+/** True for RM rejecting the query itself (a field, argument or type it no longer has). */
+export function isSchemaMismatch(errors) {
+    return errors.some((e) => e.extensions?.code === "GRAPHQL_VALIDATION_FAILED" ||
+        /Cannot query field|Unknown argument|Unknown type|Unknown fragment|is not defined by type/.test(e.message));
+}
 /**
- * Persisted-query READ (hash captured from a HAR; may rotate server-side). When
- * RM no longer knows the hash, resend with the query text from the web bundle -
- * what the web client itself does on PersistedQueryNotFound - so a rotation
- * degrades to a log line instead of a broken tool.
+ * READ: send one of the web app's read queries with its bundled text. If RM
+ * rejects the query itself (its schema changed under the bundled text), the
+ * error keeps RM's messages and says how to regenerate the text.
  */
 export async function rmGraphQL(body) {
     const op = body.operationName;
-    const variables = body.variables ?? {};
     try {
-        return await rmExecute(op, {
-            operationName: op,
-            variables,
-            extensions: { persistedQuery: { version: 1, sha256Hash: PERSISTED[op] } },
-        });
+        return await rmExecute(op, { operationName: op, variables: body.variables ?? {}, query: readText(op) });
     }
     catch (err) {
-        const text = QUERY_TEXT[op];
-        if (!(err instanceof PersistedQueryNotFoundError) || !text)
-            throw err;
-        if (!fellBack.has(op)) {
-            fellBack.add(op);
-            console.warn(`[rm] ${err.message} Falling back to the bundled query text.`);
+        if (err instanceof RMGraphQLError && isSchemaMismatch(err.errors)) {
+            throw new RMGraphQLError(`${err.message} (Rocket Money's schema no longer matches the bundled query: run \`npm run refresh-query-text\`, rebuild and deploy.)`, err.data, err.errors);
         }
-        return rmExecute(op, { operationName: op, variables, query: text });
+        throw err;
     }
 }
 /**
- * Full-text operation: sends the whole query string rather than a persisted
- * hash, so RM rotating a read hash can never break it. Every write uses this,
- * as do the transaction-rule reads.
+ * Full-text operation with a query built here rather than taken from the bundle.
+ * Every write uses this, as do the transaction-rule reads.
  */
 export async function rmFullText(operationName, query, variables) {
     return rmExecute(operationName, { operationName, query, variables });

@@ -92,7 +92,8 @@ From README's TODO section:
       answer counts as reachable, so Rocket Money's own refusals keep their errors. The
       log since 2026-10-27 had 4 blips (`Navigation timeout`, `ERR_CONNECTION_CLOSED`)
       that went down the headless-then-window path.
-- [ ] Capture the HAR for `npm run refresh-hashes` automatically.
+- [x] ~~Capture the HAR for `npm run refresh-hashes` automatically.~~ Moot since F9
+      (2026-11-22): reads no longer use hashes, so there's no HAR to capture.
 - [x] README note: **tool changes don't reach existing chats.** *Done 2026-11-22.* A conversation that already
       loaded a tool keeps the definition it loaded, even after Claude Desktop restarts or
       the server redeploys; only tools it hadn't loaded yet come through new. After a
@@ -278,12 +279,19 @@ then A2-A4 (need the rotation investigation and more care), then E.
 - [ ] **F8. `/api/transactions` rows still use the old shape** (no `original_date`,
       `ignore`, `account`; nulls included). Switch to the shared `rows.ts` shape once the
       card gate on lockbox is updated to accept it; that's the one consumer.
-- [ ] **F9. `TransactionCategories` and the other 10 reads still use persisted hashes.**
+- [x] **F9. `TransactionCategories` and the other 10 reads still use persisted hashes.**
       They fall back to query text when a hash goes stale, so nothing breaks, but each
       rotation costs a failed request per operation until `npm run refresh-hashes` runs.
       Option: send query text first for reads, as search and rules already do, and drop
       `PERSISTED` and the HAR workflow. Trade-off: requests no longer look like the web
-      app's.
+      app's. *Done 2026-11-22 (PR #31):* took that option. `rmGraphQL`
+      and the session probe send the bundled text; `PERSISTED`, `CAPTURE_PAGE` and
+      `PersistedQueryNotFoundError` are gone, and `npm run refresh-hashes` became
+      `npm run refresh-query-text` (bundle only, no HAR mode). A read RM rejects as
+      invalid (schema change) keeps RM's errors and adds the regenerate hint. The text
+      was regenerated from the 2026-11-22 bundle (unchanged), and all 11 reads plus the
+      probe ran live with it: 12 requests, no fallbacks. The trade-off is small in
+      practice: the web app sends the text itself whenever a hash misses.
 - [x] **F10. Timestamped logs would close two checks** (keepalive and login re-probe)
       from the log alone. That's the backlog item "Timestamp the server log" [other agent];
       worth doing first. *Done 2026-11-22 (PR #27):* `src/log.ts`

@@ -255,15 +255,14 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
 
 ## Notes
 
-- Rocket Money rotates GraphQL query hashes every few weeks, because a hash is tied
-  to one build of its web bundle. A rotated hash no longer breaks a tool: the read
-  is resent with the query text in `src/rm/query-text.ts` and the server logs
-  `PersistedQueryNotFound ... Falling back`. To fix the hash properly, open the page
-  the log line names with devtools recording, export a HAR, and run
-  `npm run refresh-hashes -- <file.har>`, which rewrites `PERSISTED` in
-  `src/rm/graphql.ts`. `npm run refresh-hashes -- --bundle` regenerates the fallback
-  query text from the public bundle (no login needed). Transaction-rule tools and all
-  writes send their own query text, so they never depend on a hash.
+- **Reads send query text, not persisted-query hashes** (since 2026-11-22). The text
+  is in `src/rm/query-text.ts`, generated from Rocket Money's public web bundle; hashes
+  are tied to one build of that bundle and used to rotate every few weeks, each
+  rotation costing a failed request until a HAR was captured. Text survives rotations.
+  It can't survive a schema change: then a read fails with Rocket Money's validation
+  error (e.g. `Cannot query field ...`) plus a hint to run `npm run refresh-query-text`
+  (no login needed), rebuild and deploy. Transaction-rule tools, search and all writes
+  build their own query text.
 - If **every** call returns `HTTP 401 on AuthenticationCheck`, including with a
   brand-new cookie, the `x-truebill-web-client-version` header has gone stale, not
   the session. The tell is that several different fresh cookies all fail
@@ -288,9 +287,9 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   server renews it silently every 40 minutes (and auto-login covers the rest). It
   depends on a stored password and on Auth0 not tightening bot detection; if that
   changes, logins fail until it is fixed.
-- **Query hashes rotate.** Reads fall back to bundled query text, which keeps working
-  until Rocket Money changes the schema itself; refreshing the hashes is a HAR capture
-  plus `npm run refresh-hashes` (see Notes).
+- **Schema changes.** Reads use query text taken from Rocket Money's web bundle; if
+  Rocket Money changes its schema, a read fails until `npm run refresh-query-text` is
+  run (see Notes).
 - **Subscriptions can't be marked cancelled** through the API (see above), only deleted.
 - **USD only.**
 
