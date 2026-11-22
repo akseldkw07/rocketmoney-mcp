@@ -53,6 +53,24 @@ function fakeRM(existing: { id: string; name: string; amount: number; date: stri
     if (b.operationName === "SetTransactionNotes") {
       return { data: { a0: { transaction: { id: b.variables.v0.transactionNodeId, note: b.variables.v0.note } } } };
     }
+    if (b.operationName === "SplitTarget") {
+      return { data: { node: { __typename: "Transaction", id: b.variables.id, amount: 300, splitStatus: null, splitParentTransaction: null } } };
+    }
+    if (b.operationName === "SplitTransactionMutation") {
+      const parts = b.variables.input.splits as { amount: number }[];
+      return {
+        data: {
+          splitTransaction: {
+            transaction: {
+              id: b.variables.input.transactionNodeId,
+              amount: 300,
+              splitStatus: "parent",
+              splitTransactions: parts.map((p, i) => ({ id: NEW(950 + i), amount: p.amount, custom_name: null, note: null, ignoredFrom: null, category: { label: "Groceries" } })),
+            },
+          },
+        },
+      };
+    }
     if (b.operationName === "SetTransactionsIgnored") {
       return { data: { setTransactionsIgnored: { countUpdated: b.variables.input.transactionNodeIds.length } } };
     }
@@ -232,4 +250,46 @@ test("delete keeps RM's error text when it refuses a delete", async () => {
   });
   const [r] = await deleteManualTransactions([T1]);
   assert.match(r.error!, /Cannot delete: locked/);
+});
+
+test("create splits the new row when asked, after its other settings", async () => {
+  freshSession();
+  const sent = fakeRM([]);
+  const [r] = await createManualTransactions([
+    { name: "Dinner", date: "2022-11-05", amount: 3, splits: [{ amount: 1, categoryNodeId: "a" }, { amount: 2, categoryNodeId: "b" }] },
+  ]);
+  assert.equal(r.id, NEW(900));
+  assert.deepEqual(r.split_parts, [NEW(950), NEW(951)]);
+  assert.deepEqual(sent.map((s) => s.operationName).slice(-2), ["SplitTarget", "SplitTransactionMutation"]);
+});
+
+test("a split that doesn't add up is reported under not_applied and the row is kept", async () => {
+  freshSession();
+  const sent = fakeRM([]);
+  const [r] = await createManualTransactions([
+    { name: "Dinner", date: "2022-11-05", amount: 3, splits: [{ amount: 1, categoryNodeId: "a" }, { amount: 1, categoryNodeId: "b" }] },
+  ]);
+  assert.equal(r.id, NEW(900));
+  assert.match(r.not_applied!.split!.message, /add up/);
+  assert.ok(!sent.some((s) => s.operationName === "SplitTransactionMutation"));
+});
+
+test("delete refuses a split part (even one marked manual) and names its parent; a parent reports its parts", async () => {
+  freshSession();
+  const P = NEW(1), C = NEW(2);
+  const sent = mockGraphQL((b) => {
+    if (b.operationName === "ManualFlags") {
+      const nodes: Record<string, unknown> = {
+        [P]: { id: P, manual: true, splitStatus: "parent", splitParentTransaction: null, splitTransactions: [{ id: C }, { id: NEW(3) }] },
+        [C]: { id: C, manual: true, splitStatus: "child", splitParentTransaction: { id: P }, splitTransactions: [] },
+      };
+      return { data: Object.fromEntries(Object.entries(b.variables).map(([k, v]) => [`a${k.slice(1)}`, nodes[v as string]])) };
+    }
+    return { data: Object.fromEntries(Object.entries(b.variables).map(([k, v]) => [`a${k.slice(1)}`, { deletedId: (v as { transactionNodeId: string }).transactionNodeId }])) };
+  });
+  const out = await deleteManualTransactions([C, P]);
+  assert.match(out[0].error!, new RegExp(`part of a split.*${P}`));
+  assert.deepEqual(out[1], { id: P, deleted: true, split_parts_deleted: 2 });
+  const del = sent.find((s) => s.operationName === "DeleteManualTransactions")!;
+  assert.deepEqual(Object.values(del.variables), [{ transactionNodeId: P }]);
 });

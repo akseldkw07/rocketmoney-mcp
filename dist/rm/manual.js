@@ -19,14 +19,12 @@
  *
  * Set by the create itself: name, date, amount and direction, category, account.
  * Set right after it, by the same calls the other write tools use: note, ignore
- * state, tax deductible. Each of those is a separate request, so it can fail on
- * its own; the row then exists without it, and the result says which one
- * failed (`not_applied`) with Rocket Money's error.
+ * state, tax deductible, and last a split into parts (splits.ts). Each of those
+ * is a separate request, so it can fail on its own; the row then exists without
+ * it, and the result says which one failed (`not_applied`) with Rocket Money's
+ * error.
  *
  * Not settable through this module, and why:
- * - **Splits.** Splitting is a separate, multi-row operation
- *   (SplitTransactionMutation / UnsplitTransactionMutation) with its own input;
- *   not built yet (TODO.md F13). Split the row afterwards in the phone app.
  * - **Amount or direction after creation.** RM has no mutation that edits a
  *   transaction's amount. Delete the row and create it again.
  * - **Account after creation.** The account is fixed when the row is made;
@@ -54,6 +52,7 @@ import { RMAuthError, RMGraphQLError, batchAliased, rmFullText } from "./graphql
 import { notATransactionId, searchTransactionsPage, setTransactionsIgnored, setTransactionsNote } from "./transactions.js";
 import { toCents } from "./format.js";
 import { addDaysYmd } from "./windows.js";
+import { splitTransaction } from "./splits.js";
 export function errorDetail(err) {
     if (!(err instanceof Error))
         return { type: typeof err, message: String(err) };
@@ -212,13 +211,22 @@ export async function createManualTransactions(items, opts = {}) {
                     throw new Error(`RM SetTransactionTaxDeductible returned ${JSON.stringify(data)}`);
             });
         }
+        if (item.splits?.length) {
+            await followUp(result, "split", async () => {
+                const split = await splitTransaction(newId, item.splits);
+                result.split_parts = split.parts.map((p) => p.id);
+            });
+        }
         out.push(result);
     }
     return out;
 }
 /**
  * WRITE: delete manual transactions. Each id is read first and only rows RM
- * marks `manual` are deleted; a bank-synced row is refused, never sent. RM's
+ * marks `manual` are deleted; a bank-synced row is refused, never sent. A part
+ * of a split is refused too: parts read `manual: true` even under a bank row,
+ * and deleting one leaves the split no longer adding up (unsplit instead).
+ * Deleting a split parent deletes its parts with it (split_parts_deleted). RM's
  * own error text is kept wherever it gave one.
  */
 export async function deleteManualTransactions(ids) {
@@ -227,7 +235,7 @@ export async function deleteManualTransactions(ids) {
         return why ? { id, error: why } : { id };
     });
     const look = ids.map((id, i) => ({ id, i })).filter((x) => !out[x.i].error);
-    const flags = await batchAliased("ManualFlags", "query", "node", { name: "id", type: "ID!" }, "id\n    ... on Transaction { manual }\n    __typename", look.map((x) => x.id));
+    const flags = await batchAliased("ManualFlags", "query", "node", { name: "id", type: "ID!" }, "id\n    ... on Transaction { manual splitStatus splitParentTransaction { id } splitTransactions { id } }\n    __typename", look.map((x) => x.id));
     const todo = [];
     look.forEach((x, k) => {
         const f = flags[k];
@@ -236,16 +244,19 @@ export async function deleteManualTransactions(ids) {
             out[x.i].error = `could not read it, so not deleted: ${f.error}`;
         else if (!f.data)
             out[x.i].error = "Rocket Money returned null for it, with no error: no such transaction, or not one of yours";
+        else if (f.data.splitParentTransaction) {
+            out[x.i].error = `part of a split, so not deleted: unsplit_transaction its parent ${f.data.splitParentTransaction.id} (or delete the parent, if that is manual)`;
+        }
         else if (f.data.manual !== true)
             out[x.i].error = "not a manual transaction (bank-synced rows can't be deleted)";
         else
-            todo.push(x);
+            todo.push({ ...x, parts: f.data.splitTransactions?.length ?? 0 });
     });
     const deleted = await batchAliased("DeleteManualTransactions", "mutation", "deleteManualTransaction", { name: "input", type: "DeleteManualTransactionInput!" }, "deletedId\n    __typename", todo.map((x) => ({ transactionNodeId: x.id })));
     todo.forEach((x, k) => {
         const r = deleted[k];
         out[x.i] = r.ok && r.data?.deletedId
-            ? { id: x.id, deleted: true }
+            ? { id: x.id, deleted: true, ...(x.parts ? { split_parts_deleted: x.parts } : {}) }
             : { id: x.id, error: `Rocket Money did not delete it: ${r.error ?? `returned ${JSON.stringify(r.data)}`}` };
     });
     return out;

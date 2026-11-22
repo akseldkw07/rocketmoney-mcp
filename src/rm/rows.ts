@@ -1,7 +1,7 @@
 // Transaction rows as callers see them, shared by the MCP tools and the /api
 // feed so both describe a transaction the same way.
 
-import { RMAuthError, rmFullText } from "./graphql.js";
+import { RMAuthError, batchAliased, rmFullText } from "./graphql.js";
 import type { RMTransaction } from "./transactions.js";
 import { accountLabel, usd } from "./format.js";
 import { liveRuleIds } from "./rules.js";
@@ -43,6 +43,58 @@ export async function accountLabels(): Promise<Map<string, string>> {
   }
   labelCache = { at: Date.now(), labels };
   return labels;
+}
+
+// Accounts that aren't in the enabled list, looked up one by one (F14), with
+// the same lifetime as the enabled list's cache.
+let unknownCache: { at: number; labels: Map<string, string> } = { at: Date.now(), labels: new Map() };
+
+/**
+ * Label the accounts rows name that `labels` (the enabled list) doesn't know:
+ * Rocket Money's own manual "Cash" account (where create_transaction files rows
+ * by default) and switched-off accounts. Each is read with node(id:), which
+ * answers for both: "Cash (manual) <id>", "(switched off) Chase Southwest 0112
+ * <id>". The id stays in the label so it can still go into account_ids. An id
+ * RM returns null for is left out (rows fall back to "(switched off) <id>"); a
+ * lookup that fails is reported in `warning` with RM's error.
+ */
+export async function labelUnknownAccounts(
+  txns: RMTransaction[],
+  labels: Map<string, string>,
+): Promise<{ labels: Map<string, string>; warning?: string }> {
+  if (Date.now() - unknownCache.at > LABEL_TTL_MS) unknownCache = { at: Date.now(), labels: new Map() };
+  const merged = new Map(labels);
+  for (const [id, label] of unknownCache.labels) if (!merged.has(id)) merged.set(id, label);
+  const missing = [...new Set(txns.map((t) => t.accountId).filter((id): id is string => !!id && !merged.has(id)))];
+  if (!missing.length) return { labels: merged };
+  const found = await batchAliased<Record<string, unknown>>(
+    "UnknownAccountLabels",
+    "query",
+    "node",
+    { name: "id", type: "ID!" },
+    "id\n    ... on Account { name number source institution { id short_name __typename } }\n    __typename",
+    missing,
+  );
+  const failures: string[] = [];
+  missing.forEach((id, i) => {
+    const r = found[i];
+    if (!r.ok) {
+      // A null node with no error just means RM has nothing for that id.
+      if (r.error !== "no result returned") failures.push(`${id}: ${r.error}`);
+      return;
+    }
+    // RM's manual "Cash" account has institution "Cash", name "Cash" and number "0000", so
+    // the usual "institution name number" label would read "Cash Cash 0000": use its name.
+    const label =
+      r.data?.source === "manual"
+        ? `${String(r.data.name ?? "account")} (manual) ${id}`
+        : `(switched off) ${accountLabel(r.data ?? {}) ?? "account"} ${id}`;
+    unknownCache.labels.set(id, label);
+    merged.set(id, label);
+  });
+  return failures.length
+    ? { labels: merged, warning: `Couldn't look up ${failures.length} account name(s), so those rows show "(switched off) <id>": ${failures.join("; ")}` }
+    : { labels: merged };
 }
 
 /**
@@ -101,6 +153,7 @@ export function shapeTxn(t: RMTransaction, ctx: RowContext): Record<string, unkn
   if (t.ignoredFrom) row.ignore = t.ignoredFrom;
   if (t.customName) row.custom_name = t.customName;
   if (t.note) row.note = t.note;
+  if (t.splitParentId) row.split_of = t.splitParentId;
   if (t.ruleIds.length) {
     const live = t.ruleIds.filter((id) => ctx.liveRules?.has(id));
     const deleted = t.ruleIds.filter((id) => !ctx.liveRules?.has(id));
@@ -155,7 +208,20 @@ export function compactTable(txns: RMTransaction[], labels: Map<string, string>)
 
 /** Rows for a list of transactions: full objects, or the compact table. */
 export async function shapeTxns(txns: RMTransaction[], compact = false) {
-  const { labels, warning } = txns.length ? await accountLabelsOrIds() : { labels: new Map<string, string>() };
+  const base = txns.length ? await accountLabelsOrIds() : { labels: new Map<string, string>() };
+  // With no names at all (base.labels empty) rows keep plain ids; otherwise name the unknown accounts too.
+  const extra = base.labels.size
+    ? await labelUnknownAccounts(txns, base.labels).catch((err: unknown) => {
+        if (err instanceof RMAuthError) throw err;
+        return {
+          labels: base.labels,
+          warning: `Couldn't look up switched-off or manual account names, so those rows show "(switched off) <id>": ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`,
+        };
+      })
+    : { labels: base.labels };
+  const labels = extra.labels;
+  const warnings = [base.warning, extra.warning].filter(Boolean);
+  const warning = warnings.length ? warnings.join(" ") : undefined;
   if (compact) return { ...(warning ? { warning } : {}), ...compactTable(txns, labels) };
   const liveRules = txns.some((t) => t.ruleIds.length) ? await liveRuleIds() : null;
   return {

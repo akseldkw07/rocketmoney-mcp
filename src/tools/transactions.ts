@@ -1,5 +1,5 @@
 // Transaction search, per-transaction writes (note, category, ignore, date) and
-// manual transactions (create, delete).
+// manual transactions (create, delete) and splits.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -9,7 +9,7 @@ import { shapeTxns } from "../rm/rows.js";
 import { addDaysYmd, monthWindows } from "../rm/windows.js";
 
 const ROW_FIELDS =
-  "Each row has id, date (the current, possibly hand-changed date), amount, name, category and account. Fields are left out when empty: original_date (the date the bank posted it) appears only when it differs from date; ignore (budget = left out of budgets, everything = left out of all spending) only when the row is ignored; custom_name (a rename, by hand or by rule), note, applied_rule_ids (live rules that have applied to it; when several set the same field, the last id has been the effective one) and deleted_rule_ids (rules that applied before being deleted - Rocket Money keeps them in the row's history). Pass compact=true for bulk reads: a table about a third the size.";
+  "Each row has id, date (the current, possibly hand-changed date), amount, name, category and account. Fields are left out when empty: original_date (the date the bank posted it) appears only when it differs from date; ignore (budget = left out of budgets, everything = left out of all spending) only when the row is ignored; custom_name (a rename, by hand or by rule), note, applied_rule_ids (live rules that have applied to it; when several set the same field, the last id has been the effective one) deleted_rule_ids (rules that applied before being deleted - Rocket Money keeps them in the row's history) and split_of (on a part of a split: the parent's id; searches list the parts, not the parent, and unsplit_transaction takes either). An account missing from list_accounts reads '<name> (manual) <id>' or '(switched off) <name> <id>'. Pass compact=true for bulk reads: a table about a third the size.";
 
 export function registerTransactionsTools(server: McpServer, writes: boolean): void {
   server.registerTool(
@@ -261,6 +261,27 @@ export function registerTransactionsTools(server: McpServer, writes: boolean): v
     }),
   );
 
+  const splitPart = z.object({
+    amount: z.number().positive().describe("USD, positive; the parts must add up exactly to the transaction's amount (its sign is applied for you)"),
+    category: z.string().describe("A category label, numeric id or category node id; Rocket Money requires one per part"),
+    name: z.string().optional().describe("The part's name; the transaction's name if omitted"),
+    note: z.string().optional(),
+    ignore: z.enum(["budget", "everything"]).optional().describe("Leave this part out of budgets or of all spending"),
+  });
+  type SplitArg = z.infer<typeof splitPart>;
+  const resolvedCategories = new Map<string, Promise<string>>();
+  // Labels resolve once per server lifetime per label; a failure isn't cached.
+  const categoryOf = (c: string) => {
+    if (!resolvedCategories.has(c)) {
+      const p = rm.resolveCategoryNodeId(c);
+      p.catch(() => resolvedCategories.delete(c));
+      resolvedCategories.set(c, p);
+    }
+    return resolvedCategories.get(c)!;
+  };
+  const toParts = async (parts: SplitArg[]): Promise<rm.SplitPartIn[]> =>
+    Promise.all(parts.map(async (p) => ({ amount: p.amount, categoryNodeId: await categoryOf(p.category), name: p.name, note: p.note, ignore: p.ignore })));
+
   const manualItem = {
     name: z.string().min(1).describe("Merchant or description, e.g. 'Patrizia'"),
     date: z.string().regex(YMD).describe("YYYY-MM-DD; any past date works (tested back to 2021)"),
@@ -275,6 +296,7 @@ export function registerTransactionsTools(server: McpServer, writes: boolean): v
     note: z.string().optional().describe("A note saved on the new row"),
     ignore: z.enum(["budget", "everything"]).optional().describe("Leave it out of budgets (budget) or out of all spending (everything); omit to count it"),
     tax_deductible: z.boolean().optional().describe("Mark it tax deductible"),
+    splits: z.array(splitPart).min(2).optional().describe("Split the new row into these parts (they must add up to `amount`); see split_transaction"),
   };
   type ManualArg = {
     name: string;
@@ -285,6 +307,7 @@ export function registerTransactionsTools(server: McpServer, writes: boolean): v
     note?: string;
     ignore?: "budget" | "everything";
     tax_deductible?: boolean;
+    splits?: SplitArg[];
   };
 
   server.registerTool(
@@ -293,8 +316,8 @@ export function registerTransactionsTools(server: McpServer, writes: boolean): v
       title: "Create manual transactions",
       description:
         "WRITES to Rocket Money: add transactions by hand, for spending that never synced (cash, an unlinked or closed card). Pass one transaction's fields, or a batch in `transactions`. They count in spending and budgets like any other row. " +
-        "Settable: name, date, amount (its sign sets spend vs income), category and account in the create itself; note, ignore and tax_deductible right after it, as separate requests (if one of those fails the row still exists, and `not_applied` names the field with Rocket Money's error). " +
-        "Not settable, and why: splits (a separate multi-row operation, not built yet; split it in the phone app); the amount, direction or account after creation (Rocket Money has no mutation that edits them: delete_transaction and create again); merchant logo, subscription link and pending status (derived from bank data, no input for them). Date, category, note, ignore and tax deductible can still be changed later with the usual tools. " +
+        "Settable: name, date, amount (its sign sets spend vs income), category and account in the create itself; note, ignore, tax_deductible and splits right after it, as separate requests (if one of those fails the row still exists, and `not_applied` names the field with Rocket Money's error; split_parts lists the parts' ids). " +
+        "Not settable, and why: the amount, direction or account after creation (Rocket Money has no mutation that edits them: delete_transaction and create again); merchant logo, subscription link and pending status (derived from bank data, no input for them). Date, category, note, ignore, tax deductible and the split can still be changed later with the usual tools. " +
         "Each item is first checked against existing rows with the same date, amount and name, and that row's id is returned (duplicate: true) instead of creating a second one, unless allow_duplicate. Sent one at a time and never retried: an error saying the request failed in transit means it may have been created, so search before resending. " +
         "A single transaction that fails returns an error with Rocket Money's full response; a batch returns the new id, or an error plus `detail` (error type, GraphQL errors, stack), per item. delete_transaction undoes one.",
       inputSchema: {
@@ -313,23 +336,18 @@ export function registerTransactionsTools(server: McpServer, writes: boolean): v
       const items: ManualArg[] = a.transactions ?? (single ? [a as ManualArg] : []);
       if (!items.length) throw new Error("Pass name, date and amount, or `transactions`.");
 
-      const resolved = new Map<string, Promise<string>>();
-      const categoryOf = (c: string) => {
-        if (!resolved.has(c)) resolved.set(c, rm.resolveCategoryNodeId(c));
-        return resolved.get(c)!;
-      };
       const ready: rm.ManualTransactionIn[] = [];
       const badCategory = new Map<number, unknown>();
       for (const [i, t] of items.entries()) {
         let categoryNodeId: string | undefined;
-        if (t.category) {
-          try {
-            categoryNodeId = await categoryOf(t.category);
-          } catch (err) {
-            // One transaction: let the error surface as is.
-            if (single) throw err;
-            badCategory.set(i, err);
-          }
+        let splits: rm.SplitPartIn[] | undefined;
+        try {
+          if (t.category) categoryNodeId = await categoryOf(t.category);
+          if (t.splits) splits = await toParts(t.splits);
+        } catch (err) {
+          // One transaction: let the error surface as is.
+          if (single) throw err;
+          badCategory.set(i, err);
         }
         ready.push({
           name: t.name,
@@ -340,6 +358,7 @@ export function registerTransactionsTools(server: McpServer, writes: boolean): v
           note: t.note,
           ignore: t.ignore,
           taxDeductible: t.tax_deductible,
+          splits,
         });
       }
       // Items with an unknown category are reported, not created.
@@ -362,12 +381,43 @@ export function registerTransactionsTools(server: McpServer, writes: boolean): v
     {
       title: "Delete manual transactions",
       description:
-        "WRITES to Rocket Money, irreversibly: delete transactions that were added by hand (create_transaction or the phone app's Add Transaction). Each id is checked first; a bank-synced transaction is refused and never sent. Returns deleted: true or an error per id.",
+        "WRITES to Rocket Money, irreversibly: delete transactions that were added by hand (create_transaction or the phone app's Add Transaction). Each id is checked first; a bank-synced transaction is refused and never sent, and so is a part of a split (use unsplit_transaction; deleting one part would leave the split not adding up). Deleting a split parent deletes its parts too (split_parts_deleted). Returns deleted: true or an error per id.",
       inputSchema: {
         transaction_ids: z.array(z.string()).min(1).max(200).describe("Transaction node ids (the `id` from create_transaction or search_transactions)"),
       },
       annotations: DESTRUCTIVE,
     },
     tool(async ({ transaction_ids }: { transaction_ids: string[] }) => perItemOutcome(await rm.deleteManualTransactions(transaction_ids))),
+  );
+
+  server.registerTool(
+    "split_transaction",
+    {
+      title: "Split a transaction",
+      description:
+        "WRITES to Rocket Money: split one transaction into parts, each with its own amount, category and optionally name, note and ignore state (e.g. a group dinner: my share in Dining, the rest ignored as reimbursed). The parts must add up exactly to the transaction's amount; give them as positive dollars. The transaction stops counting and its parts count instead; searches then list the parts (each with split_of = the parent's id), not the parent. Splitting an already-split transaction replaces all its parts; pass the parent's id (a part's id is refused, naming the parent). Works on synced and manual transactions alike. Returns the parent id and each part's id, amount, name, category, note and ignore. Errors come back as Rocket Money sent them (USER_ERROR = amounts don't add up, REQUIRED_VALUE_ERROR = a part without a category).",
+      inputSchema: {
+        transaction_id: z.string().describe("The transaction node id to split (the parent, if it's already split)"),
+        splits: z.array(splitPart).min(2).max(50).describe("The parts, at least 2"),
+      },
+      annotations: WRITE,
+    },
+    tool(async ({ transaction_id, splits }: { transaction_id: string; splits: SplitArg[] }) =>
+      rm.splitTransaction(transaction_id, await toParts(splits)),
+    ),
+  );
+
+  server.registerTool(
+    "unsplit_transaction",
+    {
+      title: "Undo a split",
+      description:
+        "WRITES to Rocket Money: undo a split. Deletes all its parts (their names, notes and categories are lost) and the original transaction counts again with its own category. Takes the parent's id or any part's id (split_of on a search row). Refused if the transaction isn't split. Returns the parent's id, amount and category.",
+      inputSchema: {
+        transaction_id: z.string().describe("The split parent's id, or any of its parts' ids"),
+      },
+      annotations: DESTRUCTIVE,
+    },
+    tool(async ({ transaction_id }: { transaction_id: string }) => rm.unsplitTransaction(transaction_id)),
   );
 }

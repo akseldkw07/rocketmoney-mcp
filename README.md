@@ -8,7 +8,7 @@ targeted edits (transaction notes and categories, hand-added transactions,
 recurring-charge corrections).
 
 Reads are annotated `readOnlyHint`; the mutating tools are marked `readOnlyHint: false`,
-and `delete_subscription` and `delete_transaction` additionally carry `destructiveHint`. Start the server with
+and `delete_subscription`, `delete_transaction` and `unsplit_transaction` additionally carry `destructiveHint`. Start the server with
 `ROCKETMONEY_READ_ONLY=1` and the write tools are never registered at all, so a client
 cannot reach them.
 
@@ -52,8 +52,10 @@ cookie anywhere until you enter your own server's URL.
 | `set_transaction_note` | Set (or clear) one transaction's free-text note |
 | `set_transaction_category` | Recategorize one transaction (accepts a category label, numeric id, or node id); optionally applies to all related transactions from the same merchant |
 | `set_transactions_category` | Recategorize a list of transactions in one call |
-| `create_transaction` | Add transactions by hand (cash, an unlinked or closed card), one or a batch, with category, account, note, ignore and tax deductible; back-dating works, and a row with the same date, amount and name is returned instead of duplicated. Splits, and changing the amount or account later, aren't possible (see the tool description) |
-| `delete_transaction` | Delete hand-added transactions; bank-synced ones are refused |
+| `create_transaction` | Add transactions by hand (cash, an unlinked or closed card), one or a batch, with category, account, note, ignore, tax deductible and splits; back-dating works, and a row with the same date, amount and name is returned instead of duplicated. Changing the amount or account later isn't possible (see the tool description) |
+| `delete_transaction` | Delete hand-added transactions; bank-synced ones and parts of a split are refused |
+| `split_transaction` | Split a transaction into parts with their own amount, category, name, note and ignore state (they must add up); re-splitting replaces the parts |
+| `unsplit_transaction` | Undo a split, deleting its parts (takes the parent or any part) |
 | `set_asset_value` | Set a manually-tracked asset's value |
 | `update_subscription` | Correct a recurring charge's name, amount, cadence or dates |
 | `mark_subscription_active` | Tell Rocket Money a subscription it wrote off is still being charged |
