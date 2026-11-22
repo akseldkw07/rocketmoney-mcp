@@ -45,12 +45,14 @@ How I looked: all 1,380 Chase checking rows grouped by counterparty (every payme
 
 | Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
 | --- | --- | --- | --- | --- | --- |
-| Crypto.com | Welcome 2022-03-16; deposits and USD withdrawals through 2022-06; login 2023-04 | 2022-03 to 2023 | $20.23 in; $1,306.42 back to Chase in June 2022 (ignored as transfers) | Deposits were before history | |
-| Coinbase | Welcome 2020-12-31; BTC sent out 2021-01; ATOM sent out 2022-04-05; still emailing | 2020-12 to 2022+ | None | Crypto was moved off-exchange at least twice | not supported |
-| Binance.US | Tax statements for 2022 and Q1 2023 | 2022 to 2023 | None | Taxable activity in 2022 |
-| Kraken | Activated 2021-04-19; new-device logins 2022-04 | 2021 to 2022 | None | |
+| Crypto.com | Welcome 2022-03-16; deposits and USD withdrawals through 2022-06; login 2023-04 | 2022-03 to 2023 | $20.23 in; $1,306.42 back to Chase in June 2022 (ignored as transfers) | Deposits were before history | can't link, only has $2.5 |
+| Coinbase | Welcome 2020-12-31; BTC sent out 2021-01; ATOM sent out 2022-04-05; still emailing | 2020-12 to 2022+ | None | Crypto was moved off-exchange at least twice | not supported, i just withdrew all my money to my chase account |
+| Binance.US | Tax statements for 2022 and Q1 2023 | 2022 to 2023 | None | Taxable activity in 2022 | couldn't sign in, will try later from inside the US. balance is $0 |
+| Kraken | Activated 2021-04-19; new-device logins 2022-04 | 2021 to 2022 | None | couldn't link, $0 balance |
 | FTX.US | Identity verified 2021-07-19; bankruptcy notices 2023-07 to 2025-01 | 2021 | None | You were noticed as a possible creditor; I found no claim or payout email |
 | Self-custody wallets | Coinbase sends to an external BTC address and a Cosmos address | 2021 to 2022 | None | Can't be tracked from here |
+
+Aksel: what about keplr / walletmask / metamask / cosmos? I dabbled in some crypto coins in 2022/2023
 
 Robinhood crypto is inside the linked Robinhood account. The "Celsius Class Ac Payouts" credit of $23.66 (2023-06-05) is a class-action payout; nothing in Gmail from Celsius Network, so I don't think you had an account there.
 
