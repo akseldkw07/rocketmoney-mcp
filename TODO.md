@@ -83,8 +83,14 @@ From README's TODO section:
       read-only token in a repo secret (or `mcp-utils` made public). Decide which, then
       add `.github/workflows/ci.yml` (Node 20+, `npm ci`, `npm run typecheck`,
       `npm test`).
-- [ ] Treat local-network timeouts/resets as offline without hiding real Rocket Money
-      failures.
+- [x] Treat local-network timeouts/resets as offline without hiding real Rocket Money
+      failures. *Done 2026-11-22 (PR #29):* `src/rm/network.ts`. Each browser
+      run (login steps and renewals) is preceded by one HEAD request to
+      app.rocketmoney.com; no answer (Node/undici codes, Chrome `net::ERR_` blips,
+      timeouts) means offline: no browser, no window, no backoff or cooldown. Any HTTP
+      answer counts as reachable, so Rocket Money's own refusals keep their errors. The
+      log since 2026-10-27 had 4 blips (`Navigation timeout`, `ERR_CONNECTION_CLOSED`)
+      that went down the headless-then-window path.
 - [ ] Capture the HAR for `npm run refresh-hashes` automatically.
 - [x] README note: **tool changes don't reach existing chats.** *Done 2026-11-22.* A conversation that already
       loaded a tool keeps the definition it loaded, even after Claude Desktop restarts or
