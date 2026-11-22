@@ -49,7 +49,7 @@ Outstanding work, last swept 2026-11-22. Owners in brackets where another agent 
 
 ## Investigate
 
-- [ ] **When does the session cookie rotate, and what ends a session?** On 2026-10-29
+- [x] **When does the session cookie rotate, and what ends a session?** On 2026-10-29
       neither `AuthenticationCheck` nor `RefreshAuthToken` rotated `tb.auth0.sid`, replaying
       an old value still worked, and calls now run 4 at a time (`ROCKETMONEY_MAX_CONCURRENCY`;
       1 goes back to one at a time) without trouble. Likely cause of the hourly deaths: an
@@ -57,6 +57,14 @@ Outstanding work, last swept 2026-11-22. Owners in brackets where another agent 
       re-login, keepalive ok at +30m, 401 at +60m; a session in steady use lasted 4h15m).
       The keepalive is now 10 minutes; see the keepalive check above. Still unknown: whether
       there is also an absolute session lifetime (the old code comment said ~3h48m).
+      *Answered 2026-11-22 from the login profile's cookies:* the app cookie
+      `tb.auth0.sid` is set for 4h, but Auth0's own sign-in cookie (`auth0`,
+      auth.rocketaccount.com) lasts only 1h from its last use. Sessions still die well
+      inside 4h (328 deaths in the log since 2026-10-27; `RefreshAuthToken` is just a
+      viewer query and renews nothing, and loading the app page sets no cookie). When
+      one dies after `auth0` has lapsed, the re-login needs the form, which headless
+      Chrome meets with a "Verify you are human" check, hence the visible window
+      (42 times). Fixed by F15.
 
 ## Backlog [other agent]
 
@@ -331,6 +339,22 @@ then A2-A4 (need the rotation investigation and more care), then E.
       number> <id>`; ids RM has nothing for keep `(switched off) <id>`, and a failed lookup
       is reported in the result's `warning`. This also finishes F11's "real names for
       switched-off accounts" (live: three switched-off cards now show their names).
+
+- [x] **F15. Stop the hourly visible login window.** *Done 2026-11-22
+      (feat/silent-renewal):* `renewSession()` in `src/rm/login.ts`, run from the
+      keepalive once the session is `ROCKETMONEY_RENEW_AFTER_MS` (40 min) old: headless,
+      drops the profile's app cookie and reloads the app, which signs in again through
+      Auth0 silently (7.7-7.9s in two live runs). That gives a fresh 4h session and
+      moves the 1h `auth0` cookie forward (12:28 -> 13:18 in the test), so the form
+      shouldn't come up. It never fills the form (stops with `needsForm` instead),
+      shares the login lock, and has its own 15-minute retry limit outside the login
+      backoff. Also fixed: the warm-renewal check ran once, 3s after load, then waited
+      only for the form, so silent sign-ins that took longer were logged as "no session
+      and no login form" (78 times) and pushed runs toward the window; the run now
+      checks for a session on every tick while it waits (`waitForSessionOrForm`).
+      Still opens a window once: after the Mac has slept or been offline for over an
+      hour. *To verify:* `grep -E "\[renewal\]|starting headful" ~/Library/Logs/rocketmoney-mcp/server.log`
+      over a day of normal use: renewals every 40-50 min and no `starting headful`.
 
 ## Second sweep (2026-10-29, after PR #7)
 
