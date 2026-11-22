@@ -271,7 +271,7 @@ then A2-A4 (need the rotation investigation and more care), then E.
       app's.
 - [x] **F10. Timestamped logs would close two checks** (keepalive and login re-probe)
       from the log alone. That's the backlog item "Timestamp the server log" [other agent];
-      worth doing first. *Done 2026-11-22 (chore/cleanup-logs-ci):* `src/log.ts`
+      worth doing first. *Done 2026-11-22 (PR #27):* `src/log.ts`
       prefixes every `console.log/info/warn/error` line with a UTC ISO time, installed at
       startup in `src/index.ts`; `ROCKETMONEY_LOG_TIMESTAMPS=0` turns it off. The two
       checks above say what to grep for; they still need a quiet idle stretch and a real
