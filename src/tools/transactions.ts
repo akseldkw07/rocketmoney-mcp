@@ -1,8 +1,9 @@
-// Transaction search and per-transaction writes (note, category, ignore, date).
+// Transaction search, per-transaction writes (note, category, ignore, date) and
+// manual transactions (create, delete).
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { COMPACT, READ, WRITE, YMD, batchOutcome, perItemOutcome, tool } from "./common.js";
+import { COMPACT, DESTRUCTIVE, READ, WRITE, YMD, batchOutcome, perItemOutcome, tool } from "./common.js";
 import * as rm from "../rm/client.js";
 import { shapeTxns } from "../rm/rows.js";
 import { addDaysYmd, monthWindows } from "../rm/windows.js";
@@ -258,5 +259,79 @@ export function registerTransactionsTools(server: McpServer, writes: boolean): v
         results.map((r) => ({ id: r.id, date: r.date || null, original_date: r.originalDate || null, ...(r.error ? { error: r.error } : {}) })),
       );
     }),
+  );
+
+  const manualItem = {
+    name: z.string().min(1).describe("Merchant or description, e.g. 'Patrizia'"),
+    date: z.string().regex(YMD).describe("YYYY-MM-DD; any past date works (tested back to 2021)"),
+    amount: z
+      .number()
+      .describe("USD, signed as search_transactions reports amounts: positive = spend, negative = income (refund, cash received)"),
+    category: z.string().optional().describe("A category label, numeric id or category node id (see list_categories); omit for none"),
+    note: z.string().optional().describe("A note saved on the new row"),
+  };
+  type ManualArg = { name: string; date: string; amount: number; category?: string; note?: string };
+
+  server.registerTool(
+    "create_transaction",
+    {
+      title: "Create manual transactions",
+      description:
+        "WRITES to Rocket Money: add transactions by hand, for spending that never synced (cash, an unlinked or closed card). Pass one transaction's fields, or a batch in `transactions`. Rocket Money files them under a manual 'Cash' account; they count in spending and budgets like any other row, and note/category/date/ignore can be changed later with the usual tools. Each is first checked against existing rows with the same date, amount and name, and that row's id is returned (duplicate: true) instead of creating a second one, unless allow_duplicate. Sent one at a time and never retried: an error saying the request failed in transit means it may have been created, so search before resending. Returns the new id, or an error, per item; delete_transaction undoes one.",
+      inputSchema: {
+        ...Object.fromEntries(Object.entries(manualItem).map(([k, v]) => [k, v.optional()])),
+        transactions: z.array(z.object(manualItem)).min(1).max(200).optional().describe("A batch, instead of the single-transaction fields"),
+        allow_duplicate: z.boolean().optional().describe("Create even when a row with the same date, amount and name exists (default false)"),
+      },
+      annotations: WRITE,
+    },
+    tool(async (a: Partial<ManualArg> & { transactions?: ManualArg[]; allow_duplicate?: boolean }) => {
+      const single = a.name !== undefined || a.date !== undefined || a.amount !== undefined;
+      if (single && a.transactions) throw new Error("Pass either one transaction's fields or `transactions`, not both.");
+      if (single && (a.name === undefined || a.date === undefined || a.amount === undefined)) {
+        throw new Error("A single transaction needs name, date and amount.");
+      }
+      const items: ManualArg[] = a.transactions ?? (single ? [a as ManualArg] : []);
+      if (!items.length) throw new Error("Pass name, date and amount, or `transactions`.");
+
+      const resolved = new Map<string, Promise<string>>();
+      const categoryOf = (c: string) => {
+        if (!resolved.has(c)) resolved.set(c, rm.resolveCategoryNodeId(c));
+        return resolved.get(c)!;
+      };
+      const ready: rm.ManualTransactionIn[] = [];
+      const badCategory = new Map<number, string>();
+      for (const [i, t] of items.entries()) {
+        let categoryNodeId: string | undefined;
+        if (t.category) {
+          try {
+            categoryNodeId = await categoryOf(t.category);
+          } catch (err) {
+            badCategory.set(i, (err as Error).message);
+          }
+        }
+        ready.push({ name: t.name, date: t.date, amount: t.amount, categoryNodeId, note: t.note });
+      }
+      // Items with an unknown category are reported, not created.
+      const sendable = ready.map((t, i) => ({ t, i })).filter((x) => !badCategory.has(x.i));
+      const created = await rm.createManualTransactions(sendable.map((x) => x.t), { allowDuplicate: a.allow_duplicate });
+      const results: rm.CreateResult[] = items.map((_, i) => ({ index: i, error: badCategory.get(i) ?? "" }));
+      created.forEach((r, k) => (results[sendable[k].i] = { ...r, index: sendable[k].i }));
+      return perItemOutcome(results);
+    }),
+  );
+
+  server.registerTool(
+    "delete_transaction",
+    {
+      title: "Delete manual transactions",
+      description:
+        "WRITES to Rocket Money, irreversibly: delete transactions that were added by hand (create_transaction or the phone app's Add Transaction). Each id is checked first; a bank-synced transaction is refused and never sent. Returns deleted: true or an error per id.",
+      inputSchema: {
+        transaction_ids: z.array(z.string()).min(1).max(200).describe("Transaction node ids (the `id` from create_transaction or search_transactions)"),
+      },
+      annotations: DESTRUCTIVE,
+    },
+    tool(async ({ transaction_ids }: { transaction_ids: string[] }) => perItemOutcome(await rm.deleteManualTransactions(transaction_ids))),
   );
 }

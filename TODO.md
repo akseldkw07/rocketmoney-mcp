@@ -273,6 +273,24 @@ then A2-A4 (need the rotation investigation and more care), then E.
       accounts, since whether `accounts(enabled: false)` or `node(id:)` returns them is
       unconfirmed without a live call.
 
+- [x] **F12. Manual transactions: `create_transaction` / `delete_transaction`.** The
+      web app has no Add Transaction screen (the phone app does), but the web API takes
+      it: the bundle's schema lists `addManualTransaction` and `deleteManualTransaction`,
+      and both work with the web session. Inputs (from validation errors; introspection
+      is off): `{ name, amountCents, direction: spend | income, date, categoryId?,
+      accountId? }` and `{ transactionNodeId }`. *Added 2026-11-22 (`src/rm/manual.ts`).*
+      Tested live with $0.01 `TEST` rows, all deleted: dated 2021 and 2022, counted in
+      spending (Medical moved by $0.01), note/category/date/ignore all work on them,
+      income is stored negative, and rows carry `manual: true` (bank rows `false`), which
+      the delete guard checks. Open:
+  - [ ] With no `accountId`, RM files rows under a manual "Cash" account it creates. It
+        isn't in `list_accounts`, so rows show `(switched off) <id>` (F11), though
+        `node(id:)` does return its name. Untested: passing `accountId` (e.g. a manual
+        account for a closed card) and what `categoryId` accepts besides a node id.
+  - [ ] Before entering a backlog of an unlinked card's purchases, check whether the
+        card's payments from a linked checking account are already categorized as the
+        spending itself: entering the purchases too would double count.
+
 ## Second sweep (2026-10-29, after PR #7)
 
 - [x] **F1. Dollars to cents in three places.** `Math.round(x * 100)` in mcp.ts

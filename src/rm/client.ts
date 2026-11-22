@@ -8,6 +8,7 @@ import { monthWindows, ymd, addDays } from "./windows.js";
 
 export * from "./graphql.js";
 export * from "./transactions.js";
+export * from "./manual.js";
 export * from "./categories.js";
 
 /** Cheap liveness probe (also rotates the cookie). Returns viewer id if authed. */
