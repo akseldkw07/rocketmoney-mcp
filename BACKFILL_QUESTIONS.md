@@ -8,14 +8,6 @@
 
 **Needs you:** the nine questions at the end of "Untracked accounts audit". Everything else is marked **OPEN** with what it is waiting on.
 
-### Blocked on the create-transaction tool
-
-**Status: OPEN, waiting on the tool.** Decided 11-22 (Aksel): backfill once transactions can be created; nothing to answer here until the tool investigation reports back (`local/TASK-create-transaction.md`).
-
-- [ ] **OPEN: Southwest card, backfill everything.** All 121 purchases and fees from `local/chase-southwest/chase-southwest-0112.csv`, $6,789.95, each with its own date and category. The two merchant credits go in too (Patrizia's −$400 on 2022-11-08, Southwest −$198.98 on 2023-04-24). The 13 payments from checking stay ignored, as they are now. Patrizia's ($1,397.29, 2022-11-06) then nets against the $400 Amex deposit and the 13 repaid seats to your $185.69.
-- [ ] **OPEN: LASIK, backfill all 14 earlier payments.** $199 a month, Apr 2021 to May 2022 ($2,786), Medical. Your leaning: create them but set those that predate the rest of the history to "ignore everything", so no month shows LASIK as its only spending. Rocket Money's history starts 2022-06-02, so that is all 14. They'd be on record with notes, and the counted total stays the 10 payments already there.
-- [ ] **OPEN, to settle when the tool exists:** (a) whether manual transactions can be back-dated to 2021 and 2022 at all (in the task brief); (b) which account they attach to, and whether to name them so they're easy to find, e.g. a "Southwest 0112:" prefix; (c) Spectrum on the Southwest card: 12 charges, $1,161.64, shared through TreeHouse, so its category and your net wait on the TreeHouse activity below.
-
 ### Untracked accounts audit
 
 **Status: OPEN, first pass done 11-22; questions for Aksel below.** Task from Aksel: find every financial institution he has had an account with that Rocket Money doesn't track (banks, brokerages, crypto, betting, credit and store cards, payment apps), using Gmail and Rocket Money transactions, especially transfers.
@@ -133,6 +125,15 @@ About $3,057 owed to you, none paid as of your 11-22 answer.
 - **Amazon Store Card 7199.** Still disconnected. Per you: nothing to do now; if access comes back, revisit all its transactions and the proxy payments.
 
 ## Completed
+
+### Backfilled with the create-transaction tool (2026-11-22)
+
+- [x] **Southwest card 0112: done.** 123 rows created from `local/chase-southwest/chase-southwest-0112.csv`: 121 purchases and fees ($6,789.95) and the two merchant credits (Patrizia's -$400, Southwest -$198.98), net $6,190.97, which equals the 13 payments from checking (still ignored). Each has its statement date and a category, is counted, and is named with an "SW0112 " prefix, so searching "SW0112" lists them all. Manual rows can't attach to a closed card, so they sit in Rocket Money's manual Cash account. Patrizia's ($1,397.29, 2022-11-06) is noted with the split; your net is $185.69.
+  - Categories I chose, say if any are wrong: 7-Eleven, Wawa, OXXO and minimarkets as Groceries; CVS and Duane Reade as Health & Wellness; FedEx, Macy's, Hudson News as Shopping; Fauquier County General District Court ($110.24) as Legal; the Mexico trip (July 2023) hotel, Scuba Luis ($1,120.13) and "ZTL*ANDRESFERNANDEZALV" ($78.34) as Travel & Vacation, its taxis as Auto & Transport, meals as Dining, and the 20 foreign transaction fees ($54.34) as Fees; Southwest tickets and points as Travel.
+  - **Southwest receipts found (11-22) and rows updated:** $5.60 is the fee on award ticket 4X4OUC, Chicago Midway to Philadelphia, now dated 2023-03-12. $106.87 is taxes on award ticket 4FR8C4, LaGuardia to Cancun, 06-30 to 07-09, and the $108 points purchase was made minutes before that booking; both now dated 2023-06-30. $198.98 was 2FQNE9, LaGuardia to Dallas on 05-26, canceled and refunded the next day; left on its purchase dates. Receipt links are in each note.
+  - **Still open:** the 12 Spectrum charges ($1,161.64) are Bills & Utilities and noted as shared; your net waits on the TreeHouse activity (under "Waiting on Venmo").
+- [x] **LASIK: done.** 14 rows of $199, 2021-04 to 2022-05 ($2,786), named "CareCredit 6162 payment (LASIK)", Medical, set to ignore everything as you suggested, since all predate the history. Dated the 13th of each month, which is approximate (the later real payments posted around then). The 10 synced payments stay counted.
+- Settled: manual transactions can be back-dated (2021 worked).
 
 ### Closed 2026-11-22
 
