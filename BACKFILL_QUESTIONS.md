@@ -16,37 +16,37 @@ How I looked: all 1,380 Chase checking rows grouped by counterparty (every payme
 
 **A. Cards and bank accounts whose spending Rocket Money can't see (these change spending totals)**
 
-| Account | Evidence | Active | Seen in Rocket Money | Status |
-| --- | --- | --- | --- | --- |
-| **Bilt Blue Card (Cardless)** | Statements from "Cardless - Bilt Card" 2026-09 to 2026-11-21, autopay notice for 11-10; "BILT CARD PMT" from checking | 2026-05 to now, **open** | 5 payments, $4,077.70 ($3,982.20 on 2026-05-18, then $64.73, $9.99, $9.99, $10.79), all ignored as card payments | **Not linked. Biggest live gap.** The purchases behind these payments aren't anywhere in Rocket Money |
-| Macy's American Express (Citi) | Statements from Citi through about 2025-07; "MACYS AUTO PYMT" from checking | 2023-04 to at least 2025-07 | 11 payments, $727.01, 2023-04-17 to 2024-10-16 | Not linked; purchases not visible |
-| Citi Access Checking 0628 | "Welcome to your Citibank account" 2022-03-05; monthly-fee emails 2024-07 and 2024-12 | 2022-03 to at least 2024-12 | 4 transfers into Chase, $1,750.51 (2022-06-15 to 2024-12-03) | Not linked. Anything paid from it, and its fees, are missing |
-| Amazon Prime Store Card 7199 (Synchrony) | Monthly statements and autopay reminders through 2026-11 | open | Disconnected since 2026-01-23 | Known; still producing statements, so purchases since January are missing |
-| Chase Southwest Plus 0112 | Known (closed) | 2022-08 to 2023-09 | 13 payments, $6,190.97 | Backfill planned (above) |
-| CareCredit 6162 (Synchrony) | Known (LASIK) | 2021-02 to 2023-03 | 10 payments, $1,989 | Backfill planned (above) |
-| Apple Cash | "APPLE CASH" rows in checking | 2023-04 to 2026-03 | $700 out (3 rows), $716 back (2024-08-08) | Not linkable; small |
-| PayPal balance | Monthly PayPal account statements 2026-03 to 2026-10 | ongoing | In: 3 transfers, $265.50. Out: $5,169.06 on 2022-07-06 (incl. $5,000 to "KOK4"), $196.88 on 2026-03-17 | Not linked. Card-funded PayPal purchases already show on the cards |
-| Affirm / Shop Pay Installments | GeoJango Maps plan approved 2022-08-23, payment 2022-09; an application 2024-11-28 | 2022 | Nothing under "Affirm" | Small; payments may sit on a card under another name |
-| Capital One card (Venture) | Approved 2019-07; statements 2021-01 and 2021-08 ($0.00 balance) | 2019 to 2021+ | No payments since 2022-06 | Before Rocket Money history; may still be open and unused |
-| Apple Card | "Welcome to your new Apple Card" 2019-11-30 | 2019 to ? | No Goldman payments since 2022-06 | Before history. Apple is now emailing you to *apply*, so it looks closed |
-| Citi Rewards+ | Welcome 2020-07-15 | 2020 to ? | n/a | Probably became today's linked Citi card (unconfirmed) |
-| X1 Card 1746 | Activated 2023-03, "Your account has been closed" 2024-09-12 | 2023-03 to 2024-09 | Linked, zero transactions | Closed; can be removed from Rocket Money |
+| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
+| --- | --- | --- | --- | --- | --- |
+| **Bilt Blue Card (Cardless)** | Statements from "Cardless - Bilt Card" 2026-09 to 2026-11-21, autopay notice for 11-10; "BILT CARD PMT" from checking | 2026-05 to now, **open** | 5 payments, $4,077.70 ($3,982.20 on 2026-05-18, then $64.73, $9.99, $9.99, $10.79), all ignored as card payments | **Not linked. Biggest live gap.** The purchases behind these payments aren't anywhere in Rocket Money | synced |
+| Macy's American Express (Citi) | Statements from Citi through about 2025-07; "MACYS AUTO PYMT" from checking | 2023-04 to at least 2025-07 | 11 payments, $727.01, 2023-04-17 to 2024-10-16 | Not linked; purchases not visible |synced |
+| Citi Access Checking 0628 | "Welcome to your Citibank account" 2022-03-05; monthly-fee emails 2024-07 and 2024-12 | 2022-03 to at least 2024-12 | 4 transfers into Chase, $1,750.51 (2022-06-15 to 2024-12-03) | Not linked. Anything paid from it, and its fees, are missing | this account might be closed? or the account number changed? look for clues of continuity in gmail or citi |
+| Amazon Prime Store Card 7199 (Synchrony) | Monthly statements and autopay reminders through 2026-11 | open | Disconnected since 2026-01-23 | Known; still producing statements, so purchases since January are missing | sync attempt failed |
+| Chase Southwest Plus 0112 | Known (closed) | 2022-08 to 2023-09 | 13 payments, $6,190.97 | Backfill planned (above) | n/a |
+| CareCredit 6162 (Synchrony) | Known (LASIK) | 2021-02 to 2023-03 | 10 payments, $1,989 | Backfill planned (above) | n/a |
+| Apple Cash | "APPLE CASH" rows in checking | 2023-04 to 2026-03 | $700 out (3 rows), $716 back (2024-08-08) | Not linkable; small | ignored |
+| PayPal balance | Monthly PayPal account statements 2026-03 to 2026-10 | ongoing | In: 3 transfers, $265.50. Out: $5,169.06 on 2022-07-06 (incl. $5,000 to "KOK4"), $196.88 on 2026-03-17 | Not linked. Card-funded PayPal purchases already show on the cards | syncd |
+| Affirm / Shop Pay Installments | GeoJango Maps plan approved 2022-08-23, payment 2022-09; an application 2024-11-28 | 2022 | Nothing under "Affirm" | Small; payments may sit on a card under another name | not available |
+| Capital One card (Venture) | Approved 2019-07; statements 2021-01 and 2021-08 ($0.00 balance) | 2019 to 2021+ | No payments since 2022-06 | Before Rocket Money history; may still be open and unused | no applicable account |
+| Apple Card | "Welcome to your new Apple Card" 2019-11-30 | 2019 to ? | No Goldman payments since 2022-06 | Before history. Apple is now emailing you to *apply*, so it looks closed | synced, looks like apple cash is only account|
+| Citi Rewards+ | Welcome 2020-07-15 | 2020 to ? | n/a | Probably became today's linked Citi card (unconfirmed) | ignore |
+| X1 Card 1746 | Activated 2023-03, "Your account has been closed" 2024-09-12 | 2023-03 to 2024-09 | Linked, zero transactions | Closed; can be removed from Rocket Money | synced |
 
 **B. Investment and savings accounts (net worth only, not spending)**
 
-| Account | Evidence | Active | Seen in Rocket Money | Status |
-| --- | --- | --- | --- | --- |
-| **Webull** (account ending WNM3) | Opened 2024-06-28; monthly statements through 2026-10; trade confirmation 2026-07-09; tax-document email 2026-01 | 2024-06 to now, **open** | No transfers to or from Chase under any Webull name | **Not linked.** Funding source unknown |
-| **Inspira Financial HSA** (via Aetna) | Identity-verification request from Inspira's HSA team 2026-01-05; "A message from Aetna/Inspira Financial" through 2026-11-06 | 2026-01 to now | None (the 14 INSPIRAFINANCIAL rows, $9,643.12, are COBRA premiums, already counted) | **Not linked.** A second HSA alongside the Fidelity one |
-| Acorns | 1099 for tax year 2020 | 2020 to ? | None | Before history |
-| Forge Global | "Welcome to Forge" 2026-04-29 | 2026 | None | Signup only, no sign of funding |
+| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
+| --- | --- | --- | --- | --- | --- |
+| **Webull** (account ending WNM3) | Opened 2024-06-28; monthly statements through 2026-10; trade confirmation 2026-07-09; tax-document email 2026-01 | 2024-06 to now, **open** | No transfers to or from Chase under any Webull name | **Not linked.** Funding source unknown | synced - need to delete manual roth - done|
+| **Inspira Financial HSA** (via Aetna) | Identity-verification request from Inspira's HSA team 2026-01-05; "A message from Aetna/Inspira Financial" through 2026-11-06 | 2026-01 to now | None (the 14 INSPIRAFINANCIAL rows, $9,643.12, are COBRA premiums, already counted) | **Not linked.** A second HSA alongside the Fidelity one | couldn't connect - no account exists afaik -- please dounle check that no account exists |
+| Acorns | 1099 for tax year 2020 | 2020 to ? | None | Before history | synced - will delete soon |
+| Forge Global | "Welcome to Forge" 2026-04-29 | 2026 | None | Signup only, no sign of funding | ignore |
 
 **C. Crypto**
 
-| Account | Evidence | Active | Seen in Rocket Money | Status |
-| --- | --- | --- | --- | --- |
-| Crypto.com | Welcome 2022-03-16; deposits and USD withdrawals through 2022-06; login 2023-04 | 2022-03 to 2023 | $20.23 in; $1,306.42 back to Chase in June 2022 (ignored as transfers) | Deposits were before history |
-| Coinbase | Welcome 2020-12-31; BTC sent out 2021-01; ATOM sent out 2022-04-05; still emailing | 2020-12 to 2022+ | None | Crypto was moved off-exchange at least twice |
+| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
+| --- | --- | --- | --- | --- | --- |
+| Crypto.com | Welcome 2022-03-16; deposits and USD withdrawals through 2022-06; login 2023-04 | 2022-03 to 2023 | $20.23 in; $1,306.42 back to Chase in June 2022 (ignored as transfers) | Deposits were before history | |
+| Coinbase | Welcome 2020-12-31; BTC sent out 2021-01; ATOM sent out 2022-04-05; still emailing | 2020-12 to 2022+ | None | Crypto was moved off-exchange at least twice | not supported |
 | Binance.US | Tax statements for 2022 and Q1 2023 | 2022 to 2023 | None | Taxable activity in 2022 |
 | Kraken | Activated 2021-04-19; new-device logins 2022-04 | 2021 to 2022 | None | |
 | FTX.US | Identity verified 2021-07-19; bankruptcy notices 2023-07 to 2025-01 | 2021 | None | You were noticed as a possible creditor; I found no claim or payout email |
