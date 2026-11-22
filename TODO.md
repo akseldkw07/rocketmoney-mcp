@@ -341,7 +341,7 @@ then A2-A4 (need the rotation investigation and more care), then E.
       switched-off accounts" (live: three switched-off cards now show their names).
 
 - [x] **F15. Stop the hourly visible login window.** *Done 2026-11-22
-      (feat/silent-renewal):* `renewSession()` in `src/rm/login.ts`, run from the
+      (PR #28):* `renewSession()` in `src/rm/login.ts`, run from the
       keepalive once the session is `ROCKETMONEY_RENEW_AFTER_MS` (40 min) old: headless,
       drops the profile's app cookie and reloads the app, which signs in again through
       Auth0 silently (7.7-7.9s in two live runs). That gives a fresh 4h session and
