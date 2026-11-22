@@ -36,7 +36,7 @@ test("toManualInput refuses a zero amount, an empty name and a bad date", () => 
 });
 
 /** A fake RM: TransactionSearch answers from `existing`, AddManualTransaction mints ids. */
-function fakeRM(existing: { id: string; name: string; amount: number; date: string }[], addFails = false) {
+function fakeRM(existing: { id: string; name: string; amount: number; date: string }[], addFails = false, taxFails = false) {
   let next = 900;
   return mockGraphQL((b: GraphQLBody) => {
     if (b.operationName === "TransactionSearch") {
@@ -52,6 +52,14 @@ function fakeRM(existing: { id: string; name: string; amount: number; date: stri
     }
     if (b.operationName === "SetTransactionNotes") {
       return { data: { a0: { transaction: { id: b.variables.v0.transactionNodeId, note: b.variables.v0.note } } } };
+    }
+    if (b.operationName === "SetTransactionsIgnored") {
+      return { data: { setTransactionsIgnored: { countUpdated: b.variables.input.transactionNodeIds.length } } };
+    }
+    if (b.operationName === "SetTransactionTaxDeductible") {
+      if (taxFails) return { data: { setTransactionTaxDeductible: null }, errors: [{ message: "Tax says no", path: ["setTransactionTaxDeductible"], extensions: { code: "FORBIDDEN" } }] };
+      const i = b.variables.input;
+      return { data: { setTransactionTaxDeductible: { transactions: [{ id: i.transactionNodeId, taxDeductible: i.taxDeductible }] } } };
     }
     throw new Error(`unexpected ${b.operationName}`);
   });
@@ -159,4 +167,68 @@ test("delete removes manual rows and refuses bank rows, missing rows and non-tra
   assert.match(out[3].error!, /not a transaction id/);
   const del = sent.find((s) => s.operationName === "DeleteManualTransactions")!;
   assert.deepEqual(Object.values(del.variables), [{ transactionNodeId: T1 }]);
+});
+
+test("account, ignore and tax deductible are all applied to the new row", async () => {
+  freshSession();
+  const sent = fakeRM([]);
+  const out = await createManualTransactions([
+    { name: "Gift", date: "2021-05-01", amount: 3, accountNodeId: "acct1", ignore: "budget", taxDeductible: true },
+  ]);
+  assert.deepEqual(out, [{ index: 0, id: NEW(900) }]);
+  assert.deepEqual(sent.map((s) => s.operationName), [
+    "TransactionSearch",
+    "AddManualTransaction",
+    "SetTransactionsIgnored",
+    "SetTransactionTaxDeductible",
+  ]);
+  assert.equal(sent[1].variables.input.accountId, "acct1");
+  assert.deepEqual(sent[2].variables.input, { transactionNodeIds: [NEW(900)], setIgnored: "budget" });
+  assert.deepEqual(sent[3].variables.input, { transactionNodeId: NEW(900), taxDeductible: true });
+});
+
+test("a failed follow-up keeps the row and reports RM's full error under not_applied", async () => {
+  freshSession();
+  fakeRM([], false, true);
+  const [r] = await createManualTransactions([{ name: "Gift", date: "2021-05-01", amount: 3, taxDeductible: true }]);
+  assert.equal(r.id, NEW(900));
+  assert.equal(r.error, undefined);
+  const d = r.not_applied!.tax_deductible!;
+  assert.equal(d.type, "RMGraphQLError");
+  assert.match(d.message, /Tax says no/);
+  assert.deepEqual(d.graphql_errors, [{ message: "Tax says no", path: ["setTransactionTaxDeductible"], extensions: { code: "FORBIDDEN" } }]);
+});
+
+test("a refused create carries RM's GraphQL errors in detail", async () => {
+  freshSession();
+  fakeRM([], true);
+  const [r] = await createManualTransactions([{ name: "A", date: "2021-05-01", amount: 1 }]);
+  assert.equal(r.detail!.type, "RMGraphQLError");
+  assert.deepEqual(r.detail!.graphql_errors, [{ message: "An error occurred.", path: ["addManualTransaction"] }]);
+});
+
+test("a transport failure carries its stack and cause", async () => {
+  freshSession();
+  globalThis.fetch = (async (_u: string, init: { body: string }) => {
+    const b = JSON.parse(init.body) as GraphQLBody;
+    if (b.operationName === "AddManualTransaction") throw new TypeError("fetch failed", { cause: new Error("ECONNRESET") });
+    return new Response(
+      JSON.stringify({ data: { viewer: { transactions: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  const [r] = await createManualTransactions([{ name: "A", date: "2021-05-01", amount: 1 }]);
+  assert.equal(r.detail!.type, "TypeError");
+  assert.match(r.detail!.stack!, /fetch failed/);
+  assert.equal(r.detail!.cause, "Error: ECONNRESET");
+});
+
+test("delete keeps RM's error text when it refuses a delete", async () => {
+  freshSession();
+  mockGraphQL((b) => {
+    if (b.operationName === "ManualFlags") return { data: { a0: { id: T1, manual: true } } };
+    return { data: { a0: null }, errors: [{ message: "Cannot delete: locked", path: ["a0"] }] };
+  });
+  const [r] = await deleteManualTransactions([T1]);
+  assert.match(r.error!, /Cannot delete: locked/);
 });

@@ -283,13 +283,26 @@ then A2-A4 (need the rotation investigation and more care), then E.
       spending (Medical moved by $0.01), note/category/date/ignore all work on them,
       income is stored negative, and rows carry `manual: true` (bank rows `false`), which
       the delete guard checks. Open:
-  - [ ] With no `accountId`, RM files rows under a manual "Cash" account it creates. It
+      The tool also takes `account_id` (a bank-linked account works too; a bad id
+      fails with `NOT_FOUND`), `ignore` and `tax_deductible` (`setTransactionTaxDeductible
+      { transactionNodeId, taxDeductible }`), all tested live. What it can't set, and why,
+      is in the `src/rm/manual.ts` header and the tool description.
+  - [ ] With no `account_id`, RM files rows under a manual "Cash" account it creates. It
         isn't in `list_accounts`, so rows show `(switched off) <id>` (F11), though
-        `node(id:)` does return its name. Untested: passing `accountId` (e.g. a manual
-        account for a closed card) and what `categoryId` accepts besides a node id.
+        `node(id:)` does return its name.
   - [ ] Before entering a backlog of an unlinked card's purchases, check whether the
         card's payments from a linked checking account are already categorized as the
         spending itself: entering the purchases too would double count.
+
+- [ ] **F13. Split transactions (separate PR).** `create_transaction` can't split a
+      row, and no tool splits a synced one either. The web bundle has
+      `SplitTransactionMutation($input: SplitTransactionInput!)` and
+      `UnsplitTransactionMutation`; a split comes back as `splitTransactions` on the
+      parent (each with amount, category, note, name). To do: read the input shape from
+      validation errors (as for F12), test on a $0.02 manual `TEST` row split in two,
+      then add `split_transaction` / `unsplit_transaction` and a `splits` option on
+      `create_transaction`. Check how split children show in `search_transactions` and
+      spending (the parent should stop counting) before shipping.
 
 ## Second sweep (2026-10-29, after PR #7)
 

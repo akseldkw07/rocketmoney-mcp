@@ -51,7 +51,7 @@ cookie anywhere until you enter your own server's URL.
 | `set_transaction_note` | Set (or clear) one transaction's free-text note |
 | `set_transaction_category` | Recategorize one transaction (accepts a category label, numeric id, or node id); optionally applies to all related transactions from the same merchant |
 | `set_transactions_category` | Recategorize a list of transactions in one call |
-| `create_transaction` | Add transactions by hand (cash, an unlinked or closed card), one or a batch; back-dating works, and a row with the same date, amount and name is returned instead of duplicated |
+| `create_transaction` | Add transactions by hand (cash, an unlinked or closed card), one or a batch, with category, account, note, ignore and tax deductible; back-dating works, and a row with the same date, amount and name is returned instead of duplicated. Splits, and changing the amount or account later, aren't possible (see the tool description) |
 | `delete_transaction` | Delete hand-added transactions; bank-synced ones are refused |
 | `set_asset_value` | Set a manually-tracked asset's value |
 | `update_subscription` | Correct a recurring charge's name, amount, cadence or dates |

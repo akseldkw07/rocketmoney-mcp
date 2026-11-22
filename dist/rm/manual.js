@@ -1,21 +1,71 @@
-// Manual transactions: rows typed in by hand rather than synced from a bank,
-// e.g. cash or a card that was never linked.
-//
-// The web app has no screen for these (only the phone app does), but its API
-// takes them: the bundle's own schema lists addManualTransaction and
-// deleteManualTransaction, and on 2026-11-22 both worked with the web session.
-// Their inputs, read from validation errors since introspection is off:
-//   AddManualTransactionInput { name: String!, amountCents: BigInt!,
-//     direction: ManualTransactionDirection! (spend | income), date: Date!,
-//     categoryId: ID, accountId: ID }
-//   DeleteManualTransactionInput { transactionNodeId: ID! }
-// With no accountId RM files the row under a manual "Cash" account it creates
-// itself. The row takes back-dating (2021 tested), counts in spending, carries
-// `manual: true`, and the existing note/category/date/ignore writes all work on it.
+/**
+ * Manual transactions: rows typed in by hand rather than synced from a bank,
+ * e.g. cash, or a card that was never linked or is closed.
+ *
+ * ## Where the API comes from
+ *
+ * The web app has no screen for these (only the phone app does), but its API
+ * takes them: the bundle's own schema lists addManualTransaction and
+ * deleteManualTransaction, and on 2026-11-22 both worked with the web session.
+ * Inputs, read from validation errors since introspection is off:
+ *
+ *   AddManualTransactionInput { name: String!, amountCents: BigInt!,
+ *     direction: ManualTransactionDirection! (spend | income), date: Date!,
+ *     categoryId: ID, accountId: ID }
+ *   DeleteManualTransactionInput { transactionNodeId: ID! }
+ *   SetTransactionTaxDeductibleInput { transactionNodeId: ID!, taxDeductible: Boolean! }
+ *
+ * ## What a create can set, and what it can't
+ *
+ * Set by the create itself: name, date, amount and direction, category, account.
+ * Set right after it, by the same calls the other write tools use: note, ignore
+ * state, tax deductible. Each of those is a separate request, so it can fail on
+ * its own; the row then exists without it, and the result says which one
+ * failed (`not_applied`) with Rocket Money's error.
+ *
+ * Not settable through this module, and why:
+ * - **Splits.** Splitting is a separate, multi-row operation
+ *   (SplitTransactionMutation / UnsplitTransactionMutation) with its own input;
+ *   not built yet (TODO.md F13). Split the row afterwards in the phone app.
+ * - **Amount or direction after creation.** RM has no mutation that edits a
+ *   transaction's amount. Delete the row and create it again.
+ * - **Account after creation.** The account is fixed when the row is made;
+ *   there is no move-to-account mutation. Delete and recreate to move it.
+ * - **A rename (custom_name) separate from the name.** A manual row's name is
+ *   whatever you create it with, so a rename adds nothing here.
+ * - **Merchant/logo (service), subscription link, rewards, pending/status.**
+ *   RM derives these from bank data; the input has no field for them.
+ *
+ * ## Behavior (tested 2026-11-22 with $0.01 rows, all deleted)
+ *
+ * With no accountId RM files the row under a manual "Cash" account it creates.
+ * accountId also takes a bank-linked account. The row takes back-dating (2021
+ * and 2022 tested), counts in spending, carries `manual: true` (bank rows read
+ * `false`), stores income as a negative amount, and the existing
+ * note/category/date/ignore/tax-deductible writes all work on it.
+ *
+ * ## Errors
+ *
+ * Nothing is reworded away: every failure keeps Rocket Money's own error text
+ * and, in `detail`, the error's type, its GraphQL errors (with path and
+ * extensions) and, for anything that isn't an RM error, the stack.
+ */
 import { RMAuthError, RMGraphQLError, batchAliased, rmFullText } from "./graphql.js";
-import { notATransactionId, searchTransactionsPage, setTransactionsNote } from "./transactions.js";
+import { notATransactionId, searchTransactionsPage, setTransactionsIgnored, setTransactionsNote } from "./transactions.js";
 import { toCents } from "./format.js";
 import { addDaysYmd } from "./windows.js";
+export function errorDetail(err) {
+    if (!(err instanceof Error))
+        return { type: typeof err, message: String(err) };
+    const d = { type: err.constructor.name, message: err.message };
+    if (err instanceof RMGraphQLError && err.errors.length)
+        d.graphql_errors = err.errors;
+    if (!(err instanceof RMGraphQLError) && !(err instanceof RMAuthError) && err.stack)
+        d.stack = err.stack;
+    if (err.cause !== undefined)
+        d.cause = err.cause instanceof Error ? `${err.cause.name}: ${err.cause.message}` : String(err.cause);
+    return d;
+}
 function isRealDate(ymd) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd))
         return false;
@@ -38,11 +88,18 @@ export function toManualInput(t) {
         amountCents: cents,
         direction: t.amount < 0 ? "income" : "spend",
         ...(t.categoryNodeId ? { categoryId: t.categoryNodeId } : {}),
+        ...(t.accountNodeId ? { accountId: t.accountNodeId } : {}),
     };
 }
 const ADD = `mutation AddManualTransaction($input: AddManualTransactionInput!) {
   addManualTransaction(input: $input) {
     transaction { id manual date amount __typename }
+    __typename
+  }
+}`;
+const TAX = `mutation SetTransactionTaxDeductible($input: SetTransactionTaxDeductibleInput!) {
+  setTransactionTaxDeductible(input: $input) {
+    transactions { id taxDeductible __typename }
     __typename
   }
 }`;
@@ -61,17 +118,27 @@ async function findDuplicate(input) {
         [t.name, t.customName].some((n) => n?.trim().toLowerCase() === want));
     return hit?.nodeId ?? null;
 }
+/** Run one follow-up write; on failure record RM's error under `field` instead of losing it. */
+async function followUp(result, field, run) {
+    try {
+        await run();
+    }
+    catch (err) {
+        (result.not_applied ??= {})[field] = errorDetail(err);
+    }
+}
 /**
  * WRITE: create manual transactions, one request at a time, in order. Each is
  * checked against existing rows first (same date, amount and name) and the
  * existing id is returned instead, unless allowDuplicate. A create is never
  * retried: a request that fails in transit may still have created the row.
  * A dead session stops the batch; the rest are reported as not attempted.
+ * Every failure carries `detail` (see errorDetail) next to its summary.
  */
 export async function createManualTransactions(items, opts = {}) {
     const out = [];
     const stop = (index, err) => {
-        out.push({ index, error: `not created: ${err.message}` });
+        out.push({ index, error: `not created: the session is not active`, detail: errorDetail(err) });
         for (let rest = index + 1; rest < items.length; rest++)
             out.push({ index: rest, error: "not attempted: the session died earlier in this batch" });
         return out;
@@ -83,7 +150,7 @@ export async function createManualTransactions(items, opts = {}) {
             input = toManualInput(item);
         }
         catch (err) {
-            out.push({ index, error: err.message });
+            out.push({ index, error: err.message, detail: errorDetail(err) });
             continue;
         }
         try {
@@ -98,7 +165,7 @@ export async function createManualTransactions(items, opts = {}) {
         catch (err) {
             if (err instanceof RMAuthError)
                 return stop(index, err);
-            out.push({ index, error: `duplicate check failed, so nothing was created: ${err.message}` });
+            out.push({ index, error: "not created: the duplicate check failed", detail: errorDetail(err) });
             continue;
         }
         let id;
@@ -106,7 +173,7 @@ export async function createManualTransactions(items, opts = {}) {
             const data = await rmFullText("AddManualTransaction", ADD, { input });
             id = data.addManualTransaction?.transaction?.id;
             if (!id)
-                throw new RMGraphQLError("Rocket Money returned no transaction", data, []);
+                throw new RMGraphQLError(`RM AddManualTransaction returned no transaction: ${JSON.stringify(data)}`, data, []);
         }
         catch (err) {
             if (err instanceof RMAuthError)
@@ -115,17 +182,35 @@ export async function createManualTransactions(items, opts = {}) {
                 index,
                 error: err instanceof RMGraphQLError
                     ? `Rocket Money refused it: ${err.message}`
-                    : `the request failed in transit, so it may have been created anyway; check search_transactions before sending it again (${err.message})`,
+                    : `the request failed in transit, so it may have been created anyway; check search_transactions before sending it again: ${err.message}`,
+                detail: errorDetail(err),
             });
             continue;
         }
         const result = { index, id };
+        const newId = id;
         if (item.note) {
-            const [n] = await setTransactionsNote([{ nodeId: id, note: item.note }]).catch((e) => [{ id, note: null, error: e.message }]);
-            if (n.error)
-                result.note_error = n.error;
-            else
+            await followUp(result, "note", async () => {
+                const [n] = await setTransactionsNote([{ nodeId: newId, note: item.note }]);
+                if (n.error)
+                    throw new Error(n.error);
                 result.note = n.note;
+            });
+        }
+        if (item.ignore) {
+            await followUp(result, "ignore", async () => {
+                const updated = await setTransactionsIgnored([newId], item.ignore);
+                if (updated !== 1)
+                    throw new Error(`RM SetTransactionsIgnored reported countUpdated ${updated}, expected 1`);
+            });
+        }
+        if (item.taxDeductible !== undefined) {
+            await followUp(result, "tax_deductible", async () => {
+                const data = await rmFullText("SetTransactionTaxDeductible", TAX, { input: { transactionNodeId: newId, taxDeductible: item.taxDeductible } });
+                const saved = data.setTransactionTaxDeductible?.transactions?.[0]?.taxDeductible;
+                if (saved !== item.taxDeductible)
+                    throw new Error(`RM SetTransactionTaxDeductible returned ${JSON.stringify(data)}`);
+            });
         }
         out.push(result);
     }
@@ -133,7 +218,8 @@ export async function createManualTransactions(items, opts = {}) {
 }
 /**
  * WRITE: delete manual transactions. Each id is read first and only rows RM
- * marks `manual` are deleted; a bank-synced row is refused, never sent.
+ * marks `manual` are deleted; a bank-synced row is refused, never sent. RM's
+ * own error text is kept wherever it gave one.
  */
 export async function deleteManualTransactions(ids) {
     const out = ids.map((id) => {
@@ -145,7 +231,10 @@ export async function deleteManualTransactions(ids) {
     const todo = [];
     look.forEach((x, k) => {
         const f = flags[k];
-        if (!f.ok || !f.data)
+        // batchAliased reports a null node with no error as "no result returned": the row doesn't exist.
+        if (!f.ok && f.error !== "no result returned")
+            out[x.i].error = `could not read it, so not deleted: ${f.error}`;
+        else if (!f.data)
             out[x.i].error = "no such transaction, or not one of yours";
         else if (f.data.manual !== true)
             out[x.i].error = "not a manual transaction (bank-synced rows can't be deleted)";
@@ -155,7 +244,9 @@ export async function deleteManualTransactions(ids) {
     const deleted = await batchAliased("DeleteManualTransactions", "mutation", "deleteManualTransaction", { name: "input", type: "DeleteManualTransactionInput!" }, "deletedId\n    __typename", todo.map((x) => ({ transactionNodeId: x.id })));
     todo.forEach((x, k) => {
         const r = deleted[k];
-        out[x.i] = r.ok && r.data?.deletedId ? { id: x.id, deleted: true } : { id: x.id, error: r.error ?? "not deleted" };
+        out[x.i] = r.ok && r.data?.deletedId
+            ? { id: x.id, deleted: true }
+            : { id: x.id, error: `Rocket Money did not delete it: ${r.error ?? `returned ${JSON.stringify(r.data)}`}` };
     });
     return out;
 }

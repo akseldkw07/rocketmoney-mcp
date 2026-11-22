@@ -188,11 +188,21 @@ export function registerTransactionsTools(server, writes) {
             .number()
             .describe("USD, signed as search_transactions reports amounts: positive = spend, negative = income (refund, cash received)"),
         category: z.string().optional().describe("A category label, numeric id or category node id (see list_categories); omit for none"),
+        account_id: z
+            .string()
+            .optional()
+            .describe("Account node id (list_accounts, or a transaction's account). Omit to use Rocket Money's manual 'Cash' account. Can't be changed later"),
         note: z.string().optional().describe("A note saved on the new row"),
+        ignore: z.enum(["budget", "everything"]).optional().describe("Leave it out of budgets (budget) or out of all spending (everything); omit to count it"),
+        tax_deductible: z.boolean().optional().describe("Mark it tax deductible"),
     };
     server.registerTool("create_transaction", {
         title: "Create manual transactions",
-        description: "WRITES to Rocket Money: add transactions by hand, for spending that never synced (cash, an unlinked or closed card). Pass one transaction's fields, or a batch in `transactions`. Rocket Money files them under a manual 'Cash' account; they count in spending and budgets like any other row, and note/category/date/ignore can be changed later with the usual tools. Each is first checked against existing rows with the same date, amount and name, and that row's id is returned (duplicate: true) instead of creating a second one, unless allow_duplicate. Sent one at a time and never retried: an error saying the request failed in transit means it may have been created, so search before resending. Returns the new id, or an error, per item; delete_transaction undoes one.",
+        description: "WRITES to Rocket Money: add transactions by hand, for spending that never synced (cash, an unlinked or closed card). Pass one transaction's fields, or a batch in `transactions`. They count in spending and budgets like any other row. " +
+            "Settable: name, date, amount (its sign sets spend vs income), category and account in the create itself; note, ignore and tax_deductible right after it, as separate requests (if one of those fails the row still exists, and `not_applied` names the field with Rocket Money's error). " +
+            "Not settable, and why: splits (a separate multi-row operation, not built yet; split it in the phone app); the amount, direction or account after creation (Rocket Money has no mutation that edits them: delete_transaction and create again); merchant logo, subscription link and pending status (derived from bank data, no input for them). Date, category, note, ignore and tax deductible can still be changed later with the usual tools. " +
+            "Each item is first checked against existing rows with the same date, amount and name, and that row's id is returned (duplicate: true) instead of creating a second one, unless allow_duplicate. Sent one at a time and never retried: an error saying the request failed in transit means it may have been created, so search before resending. " +
+            "A single transaction that fails returns an error with Rocket Money's full response; a batch returns the new id, or an error plus `detail` (error type, GraphQL errors, stack), per item. delete_transaction undoes one.",
         inputSchema: {
             ...Object.fromEntries(Object.entries(manualItem).map(([k, v]) => [k, v.optional()])),
             transactions: z.array(z.object(manualItem)).min(1).max(200).optional().describe("A batch, instead of the single-transaction fields"),
@@ -224,16 +234,34 @@ export function registerTransactionsTools(server, writes) {
                     categoryNodeId = await categoryOf(t.category);
                 }
                 catch (err) {
-                    badCategory.set(i, err.message);
+                    // One transaction: let the error surface as is.
+                    if (single)
+                        throw err;
+                    badCategory.set(i, err);
                 }
             }
-            ready.push({ name: t.name, date: t.date, amount: t.amount, categoryNodeId, note: t.note });
+            ready.push({
+                name: t.name,
+                date: t.date,
+                amount: t.amount,
+                categoryNodeId,
+                accountNodeId: t.account_id,
+                note: t.note,
+                ignore: t.ignore,
+                taxDeductible: t.tax_deductible,
+            });
         }
         // Items with an unknown category are reported, not created.
         const sendable = ready.map((t, i) => ({ t, i })).filter((x) => !badCategory.has(x.i));
         const created = await rm.createManualTransactions(sendable.map((x) => x.t), { allowDuplicate: a.allow_duplicate });
-        const results = items.map((_, i) => ({ index: i, error: badCategory.get(i) ?? "" }));
+        const results = items.map((_, i) => {
+            const err = badCategory.get(i);
+            return { index: i, error: `not created: ${err?.message}`, detail: rm.errorDetail(err) };
+        });
         created.forEach((r, k) => (results[sendable[k].i] = { ...r, index: sendable[k].i }));
+        if (single && results[0].error) {
+            throw new Error(results[0].error, { cause: results[0].detail });
+        }
         return perItemOutcome(results);
     }));
     server.registerTool("delete_transaction", {
