@@ -6,92 +6,22 @@
 
 ## Open questions
 
-**Needs you:** the nine questions at the end of "Untracked accounts audit". Everything else is marked **OPEN** with what it is waiting on.
+**Needs you:** items 2 and 3 under "Follow-ups from the accounts audit" (item 1 is in progress). Everything else is marked **OPEN** with what it is waiting on.
 
-### Untracked accounts audit
+### Follow-ups from the accounts audit
 
-**Status: OPEN, first pass done 11-22; questions for Aksel below.** Task from Aksel: find every financial institution he has had an account with that Rocket Money doesn't track (banks, brokerages, crypto, betting, credit and store cards, payment apps), using Gmail and Rocket Money transactions, especially transfers.
+**Status: OPEN, waiting on you.**
 
-How I looked: all 1,380 Chase checking rows grouped by counterparty (every payment or transfer to something that isn't a linked account), merchant searches across all Rocket Money accounts, and Gmail searches by sender for about 120 banks, card issuers, brokerages, crypto exchanges, sportsbooks and payment apps, plus statement, welcome and tax-form emails. "Rocket Money" amounts cover 2022-06-02 onward only. Gmail shows that an account existed, not its balance.
-
-**A. Cards and bank accounts whose spending Rocket Money can't see (these change spending totals)**
-
-| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
-| --- | --- | --- | --- | --- | --- |
-| **Bilt Blue Card (Cardless)** | Statements from "Cardless - Bilt Card" 2026-09 to 2026-11-21, autopay notice for 11-10; "BILT CARD PMT" from checking | 2026-05 to now, **open** | 5 payments, $4,077.70 ($3,982.20 on 2026-05-18, then $64.73, $9.99, $9.99, $10.79), all ignored as card payments | **Not linked. Biggest live gap.** The purchases behind these payments aren't anywhere in Rocket Money | synced |
-| Macy's American Express (Citi) | Statements from Citi through about 2025-07; "MACYS AUTO PYMT" from checking | 2023-04 to at least 2025-07 | 11 payments, $727.01, 2023-04-17 to 2024-10-16 | Not linked; purchases not visible |synced |
-| Citi Access Checking 0628 | "Welcome to your Citibank account" 2022-03-05; monthly-fee emails 2024-07 and 2024-12 | 2022-03 to at least 2024-12 | 4 transfers into Chase, $1,750.51 (2022-06-15 to 2024-12-03) | Not linked. Anything paid from it, and its fees, are missing | this account might be closed? or the account number changed? look for clues of continuity in gmail or citi |
-| Amazon Prime Store Card 7199 (Synchrony) | Monthly statements and autopay reminders through 2026-11 | open | Disconnected since 2026-01-23 | Known; still producing statements, so purchases since January are missing | sync attempt failed |
-| Chase Southwest Plus 0112 | Known (closed) | 2022-08 to 2023-09 | 13 payments, $6,190.97 | Backfill planned (above) | n/a |
-| CareCredit 6162 (Synchrony) | Known (LASIK) | 2021-02 to 2023-03 | 10 payments, $1,989 | Backfill planned (above) | n/a |
-| Apple Cash | "APPLE CASH" rows in checking | 2023-04 to 2026-03 | $700 out (3 rows), $716 back (2024-08-08) | Not linkable; small | ignored |
-| PayPal balance | Monthly PayPal account statements 2026-03 to 2026-10 | ongoing | In: 3 transfers, $265.50. Out: $5,169.06 on 2022-07-06 (incl. $5,000 to "KOK4"), $196.88 on 2026-03-17 | Not linked. Card-funded PayPal purchases already show on the cards | syncd |
-| Affirm / Shop Pay Installments | GeoJango Maps plan approved 2022-08-23, payment 2022-09; an application 2024-11-28 | 2022 | Nothing under "Affirm" | Small; payments may sit on a card under another name | not available |
-| Capital One card (Venture) | Approved 2019-07; statements 2021-01 and 2021-08 ($0.00 balance) | 2019 to 2021+ | No payments since 2022-06 | Before Rocket Money history; may still be open and unused | no applicable account |
-| Apple Card | "Welcome to your new Apple Card" 2019-11-30 | 2019 to ? | No Goldman payments since 2022-06 | Before history. Apple is now emailing you to *apply*, so it looks closed | synced, looks like apple cash is only account|
-| Citi Rewards+ | Welcome 2020-07-15 | 2020 to ? | n/a | Probably became today's linked Citi card (unconfirmed) | ignore |
-| X1 Card 1746 | Activated 2023-03, "Your account has been closed" 2024-09-12 | 2023-03 to 2024-09 | Linked, zero transactions | Closed; can be removed from Rocket Money | synced |
-
-**B. Investment and savings accounts (net worth only, not spending)**
-
-| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
-| --- | --- | --- | --- | --- | --- |
-| **Webull** (account ending WNM3) | Opened 2024-06-28; monthly statements through 2026-10; trade confirmation 2026-07-09; tax-document email 2026-01 | 2024-06 to now, **open** | No transfers to or from Chase under any Webull name | **Not linked.** Funding source unknown | synced - need to delete manual roth - done|
-| **Inspira Financial HSA** (via Aetna) | Identity-verification request from Inspira's HSA team 2026-01-05; "A message from Aetna/Inspira Financial" through 2026-11-06 | 2026-01 to now | None (the 14 INSPIRAFINANCIAL rows, $9,643.12, are COBRA premiums, already counted) | **Not linked.** A second HSA alongside the Fidelity one | couldn't connect - no account exists afaik -- please dounle check that no account exists |
-| Acorns | 1099 for tax year 2020 | 2020 to ? | None | Before history | synced - will delete soon |
-| Forge Global | "Welcome to Forge" 2026-04-29 | 2026 | None | Signup only, no sign of funding | ignore |
-
-**C. Crypto**
-
-| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
-| --- | --- | --- | --- | --- | --- |
-| Crypto.com | Welcome 2022-03-16; deposits and USD withdrawals through 2022-06; login 2023-04 | 2022-03 to 2023 | $20.23 in; $1,306.42 back to Chase in June 2022 (ignored as transfers) | Deposits were before history | can't link, only has $2.5 |
-| Coinbase | Welcome 2020-12-31; BTC sent out 2021-01; ATOM sent out 2022-04-05; still emailing | 2020-12 to 2022+ | None | Crypto was moved off-exchange at least twice | not supported, i just withdrew all my money to my chase account |
-| Binance.US | Tax statements for 2022 and Q1 2023 | 2022 to 2023 | None | Taxable activity in 2022 | couldn't sign in, will try later from inside the US. balance is $0 |
-| Kraken | Activated 2021-04-19; new-device logins 2022-04 | 2021 to 2022 | None | couldn't link, $0 balance |
-| FTX.US | Identity verified 2021-07-19; bankruptcy notices 2023-07 to 2025-01 | 2021 | None | You were noticed as a possible creditor; I found no claim or payout email |
-| Self-custody wallets | Coinbase sends to an external BTC address and a Cosmos address | 2021 to 2022 | None | Can't be tracked from here |
-
-Aksel: what about keplr / walletmask / metamask / cosmos? I dabbled in some crypto coins in 2022/2023
-
-Robinhood crypto is inside the linked Robinhood account. The "Celsius Class Ac Payouts" credit of $23.66 (2023-06-05) is a class-action payout; nothing in Gmail from Celsius Network, so I don't think you had an account there.
-
-**D. Betting and prediction markets**
-
-| Account | Evidence | Active | Seen in Rocket Money | Net to you |
-| --- | --- | --- | --- | --- |
-| DraftKings | Welcome 2021-01-25; withdrawals 2023-03 and 2025-08-27 | 2021 to 2025 | In $7,000 (2023-03-07, 03-09); out $7,329.25 (2023-03-13) and $350 (2025-08-27) | +$679.25 |
-| FanDuel | Verified 2021-12-31; withdrawal 2023-10-28 | 2021 to 2023 | In $100; out $380 (both 2023-10-30) | +$280 |
-| Kalshi | Deposit notice 2024-07-08 | 2024 to now | In $100 (2024-07-08) and $102 (2026-02-09); out $98 (2024-07-19) | −$104 (the $102 may still be on the platform) |
-| BetMGM (Pennsylvania) | "Important update regarding your deposit" 2023-03-09; dormant-account notices 2026-01 and 2026-03 | 2023-03 | None | Deposit seems to have failed; nothing reached the bank |
-| Polymarket | Terms and promo emails 2026-09 to 2026-10 | 2026 | None | Account exists; crypto-funded, so invisible here |
-
-Nothing found for Caesars, ESPN Bet, Fanatics, PrizePicks, Underdog or PredictIt.
-
-**Checked and not separate accounts:** J.P. Morgan "investments statement" emails are the linked Chase Roth IRA 8215. Wells Fargo "BILTCRDCRD" payments ($18,966.92, 2025-10 to 2026-01) are the old Wells Fargo Bilt card, which is linked (listed as Autograph 1880; last transaction 2026-02-19). Wise only has a feedback and privacy email (2026-06), no transfer. Splitwise Pay $722.23 (2023-07-13) is a payment to a person, not an account. Capital One "credit limit" emails are CreditWise monitoring. Nelnet is Columbia's tuition plan. WageWorks was a 2019 commuter benefit.
-
-**Questions for Aksel**
-
-1. **Bilt Blue Card:** can you link it in Rocket Money (Cardless)? If it won't connect, I can pull the statements the way we did for Southwest. Also: what was the $3,982.20 paid on 2026-05-18? If it includes rent, rent since March isn't being counted.
+1. **Macy's: the receipts are in Gmail.** Each "Thanks for your order" email has the items, the total and the card used. Online orders found (dates approximate, from the emails): 2532967694 (2022-10), 2652703568 and 371778567 (2023-02-20), 2670053775 (2023-02-25), 2670681882 (2023-02-25, canceled), 2680225506 (2023-03-19), 2848891865 (2023-12), 2999768666 (2024-09), 4717839741 (2026-02). I have read one in full so far: 2652703568, a London Fog overcoat, $98.75, paid with "American Express ending 1003" (https://mail.google.com/mail/u/0/#all/18671a27762b3a56). The linked Macy's card ends 3454, so 1003 is either the same account before a reissue or a different Amex; **which is it?** Next step: read the other seven, add the in-store purchases and returns from your PDF, and check the net against the $727.01 of payments before creating rows. Statements would still be the cleanest check if you get them.
    - Answer:
-2. **Webull:** want it linked for net worth? How was it funded (I see nothing from Chase)?
+2. **Self-custody crypto: mostly answered, you did cash it out.** In June 2022 you sent coins back to Crypto.com, sold them and withdrew dollars to Chase. Those are the three "FORISUS_METRCOBK CardtoBank" credits already in Rocket Money (ignored as transfers): $100.00 (06-08), $346.87 (06-14), $859.55 (06-21), **$1,306.42 in all**.
+   - The $859.55 is exact: "You have sold 140.4662 ATOM for 859.55 USD" (2022-06-17, https://mail.google.com/mail/u/0/#all/1816f1a62b247bbb), after a crypto deposit back into Crypto.com the same evening.
+   - The $100 and $346.87 follow a BNB deposit and "BNB sell request confirmed" on 2022-05-31 / 06-01. I haven't opened that email, so the BNB amount sold is not confirmed.
+   - What went out on 2022-04-17 was 255 ATOM (to the Cosmos wallet, now empty on Cosmos Hub) and 7.82 BNB (to MetaMask on BNB Smart Chain). So about 115 ATOM and some BNB never came back through Crypto.com: lost in the pools or the price drop, sold elsewhere, or still sitting in Keplr (Osmosis) or MetaMask. No other crypto-looking deposit reached Chase checking since June 2022; I went through every credit that isn't payroll, Zelle, Venmo, a brokerage or a tax refund.
+   - **Still worth one look:** open Keplr and MetaMask. If what's there is under $100, tell me and I'll note it and close this.
    - Answer:
-3. **Inspira HSA:** is there money in it (employer or Aetna contributions)? Link it, or ignore?
+3. **Bilt fee refund ($212.88).** Bilt has no support email; card support is the in-app concierge chat or the phone number on the card. I drafted the message (in chat). Say if you want me to send it through the Bilt app on your phone, or send it yourself.
    - Answer:
-4. **Citi checking 0628:** still open? What was it used for?
-   - Answer:
-5. **Macy's Amex:** still open? Backfill the $727.01 of purchases from statements, or leave the payments as the record?
-   - Answer:
-6. **Crypto:** is anything still held on Coinbase, Kraken, Binance.US, Crypto.com or in a wallet? Did you file an FTX claim?
-   - Answer:
-7. **Betting rows are categorized inconsistently:** DraftKings is Entertainment and counted; FanDuel's deposit is counted but its withdrawal is ignored; Kalshi is spread over Investment, Income and Uncategorized. Which treatment do you want for all of them? I haven't changed anything.
-   - Answer:
-8. **PayPal $5,000 to "KOK4" on 2022-07-06:** what was it?
-   - Answer:
-9. **Capital One and Apple Card:** closed? And remove the closed X1 card from Rocket Money?
-   - Answer:
-
-**Not covered in this pass:** transfers to other institutions from inside Venmo, and accounts that only ever emailed another address (for example a work or school address).
 
 ### Waiting on Venmo
 
@@ -127,6 +57,127 @@ About $3,057 owed to you, none paid as of your 11-22 answer.
 - **Amazon Store Card 7199.** Still disconnected. Per you: nothing to do now; if access comes back, revisit all its transactions and the proxy payments.
 
 ## Completed
+
+### Closed 2026-11-22 (audit follow-ups)
+
+- **Betting and prediction markets: all Entertainment & Rec. and counted, per you.** Changed: FanDuel's $380 withdrawal (was Internal Transfers, ignored), and Kalshi's four rows (were Investment, Income, Uncategorized). DraftKings and FanDuel's deposit were already there. Nets: DraftKings +$679.25, FanDuel +$280, Kalshi -$206 ($304 in, $98 out, $0.29 left).
+- **PayPal $5,000 to "KOK4" (2022-07-06): confirmed as repaying your mom.** Your texts that day: "You lent me 5k", her "Ok I requested $5k from you by PayPal", your "Done"; PayPal because Venmo was frozen. The loan came in by Venmo on 2022-06-21 ($2,000 + $3,000). All three rows were already Loan Payment and net to $0; notes updated, "uncertain" removed.
+- **Acorns, X1:** linked and empty; remove whenever. **Binance.US:** retry from the US.
+
+### Untracked accounts audit: first pass and linking (2026-11-22)
+
+**Status: DONE; what is left is under "Open questions" at the top.** Task from Aksel: find every financial institution he has had an account with that Rocket Money doesn't track (banks, brokerages, crypto, betting, credit and store cards, payment apps), using Gmail and Rocket Money transactions, especially transfers.
+
+How I looked: all 1,380 Chase checking rows grouped by counterparty (every payment or transfer to something that isn't a linked account), merchant searches across all Rocket Money accounts, and Gmail searches by sender for about 120 banks, card issuers, brokerages, crypto exchanges, sportsbooks and payment apps, plus statement, welcome and tax-form emails. "Rocket Money" amounts cover 2022-06-02 onward only. Gmail shows that an account existed, not its balance.
+
+**A. Cards and bank accounts whose spending Rocket Money can't see (these change spending totals)**
+
+| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
+| --- | --- | --- | --- | --- | --- |
+| **Bilt Blue Card (Cardless)** | Statements from "Cardless - Bilt Card" 2026-09 to 2026-11-21, autopay notice for 11-10; "BILT CARD PMT" from checking | 2026-05 to now, **open** | 5 payments, $4,077.70 ($3,982.20 on 2026-05-18, then $64.73, $9.99, $9.99, $10.79), all ignored as card payments | **Not linked. Biggest live gap.** The purchases behind these payments aren't anywhere in Rocket Money | synced |
+| Macy's American Express (Citi) | Statements from Citi through about 2025-07; "MACYS AUTO PYMT" from checking | 2023-04 to at least 2025-07 | 11 payments, $727.01, 2023-04-17 to 2024-10-16 | Not linked; purchases not visible |synced |
+| Citi Access Checking 0628 | "Welcome to your Citibank account" 2022-03-05; monthly-fee emails 2024-07 and 2024-12 | 2022-03 to at least 2024-12 | 4 transfers into Chase, $1,750.51 (2022-06-15 to 2024-12-03) | Not linked. Anything paid from it, and its fees, are missing | this account might be closed? or the account number changed? look for clues of continuity in gmail or citi |
+| Amazon Prime Store Card 7199 (Synchrony) | Monthly statements and autopay reminders through 2026-11 | open | Disconnected since 2026-01-23 | Known; still producing statements, so purchases since January are missing | sync attempt failed |
+| Chase Southwest Plus 0112 | Known (closed) | 2022-08 to 2023-09 | 13 payments, $6,190.97 | Backfilled 11-22 (see Completed) | n/a |
+| CareCredit 6162 (Synchrony) | Known (LASIK) | 2021-02 to 2023-03 | 10 payments, $1,989 | Backfilled 11-22 (see Completed) | n/a |
+| Apple Cash | "APPLE CASH" rows in checking | 2023-04 to 2026-03 | $700 out (3 rows), $716 back (2024-08-08) | Not linkable; small | ignored |
+| PayPal balance | Monthly PayPal account statements 2026-03 to 2026-10 | ongoing | In: 3 transfers, $265.50. Out: $5,169.06 on 2022-07-06 (incl. $5,000 to "KOK4"), $196.88 on 2026-03-17 | Not linked. Card-funded PayPal purchases already show on the cards | syncd |
+| Affirm / Shop Pay Installments | GeoJango Maps plan approved 2022-08-23, payment 2022-09; an application 2024-11-28 | 2022 | Nothing under "Affirm" | Small; payments may sit on a card under another name | not available |
+| Capital One card (Venture) | Approved 2019-07; statements 2021-01 and 2021-08 ($0.00 balance) | 2019 to 2021+ | No payments since 2022-06 | Before Rocket Money history; may still be open and unused | no applicable account |
+| Apple Card | "Welcome to your new Apple Card" 2019-11-30 | 2019 to ? | No Goldman payments since 2022-06 | Before history. Apple is now emailing you to *apply*, so it looks closed | synced, looks like apple cash is only account|
+| Citi Rewards+ | Welcome 2020-07-15 | 2020 to ? | n/a | Probably became today's linked Citi card (unconfirmed) | ignore |
+| X1 Card 1746 | Activated 2023-03, "Your account has been closed" 2024-09-12 | 2023-03 to 2024-09 | Linked, zero transactions | Closed; can be removed from Rocket Money | synced |
+
+> **Claude (checked 11-22 against Rocket Money's account list and the new rows):**
+> - **Bilt Blue Card 2132: linked, history from 2026-02-07.** It is the same card number as the old Wells Fargo Bilt card (2132), which moved to Cardless in February, so there is no overlap: Wells Fargo's last purchase is 02-05 and this starts 02-07. Three things to fix or know:
+>   - **"Balance Transfer" $3,188.13 (2026-02-19) is counted as spending (Uncategorized).** It is the old Wells Fargo balance moving over (Wells Fargo shows the matching -$3,188.13 payment, ignored), so it double counts purchases already in Rocket Money. Should be ignored.
+>   - **The $3,982.20 payment (05-16) was not rent.** It is that $3,188.13 plus about $580 of subway and lunches (Feb to Apr) plus **$141.88 of interest and $71 of late fees** (04-16 to 05-21), because the transferred balance sat unpaid for three months. Those are now counted under Fees, which is right. Worth asking Bilt to refund them, since the balance came from their migration.
+>   - **Kalshi $102 on 2026-02-09 now appears twice:** once on this card and once on Chase checking ("KALSHI KALSHI.COM NY 02/09"). Were there two $102 deposits that day, or one? Both are in Investment, so spending totals aren't affected either way.
+>   - The "BillPay Account 4505" that came with it has no transactions.
+
+AKSEL: i downloaded kalshi history. separate deposits. Re the payment with fees + balance transfer - there should only be one rent payment per month. remove the duplicated one. follow up if this is unclear, and provide me with more context
+
+> - **Macy's Amex 3454: linked, but no history came with it.** Only two $0.00 interest lines from 2025-07. The purchases behind the $727.01 of payments (2023-04 to 2024-10) are still missing; statements would be needed to backfill them. Balance is $0.
+
+AKSEL: I downloaded the macy's activity to local/ as well
+
+> - **PayPal: linked, and three of its rows double count charges already on a card or checking.** All three are counted now:
+>   - "Payment to McCune Ranch LLC" $3,062.50 (2025-05-19, Shopping) = Amex "PAYPAL *MCCUNERANCH" $3,062.50 (05-20), the Hog Hunt balance.
+>   - "Payment to MW/TD Inspired LLC" $52.28 (2025-01-02) = Amex "PAYPAL *PINUTRITION" $52.28 (01-03).
+>   - "Payment to Petar Pavlovic" $197.99 (2026-03-16) = checking "PETAR PAVLOVIC IAT PAYPAL" $196.88 (03-17); the $1.11 difference was paid from the Flixbus settlement credit sitting in PayPal.
+>   - The two Flixbus settlement credits ($1.11, $0.62) are new and fine.
+
+AKSEL: lets avoid duplicates. i'm fine with keeping either paypal or amex, but just keep it consistent (write a rule about this for other similar cases)
+
+> - **Apple: linked as Apple Cash only (no Apple Card), as you noted.** Its two "Transfer" rows ($90 on 2025-11-29, $10 on 2026-03-29) double count the "APPLE CASH SENT MONE" rows on checking. One side should be ignored.
+> - **Amazon store card 7199:** it is switched back on but still shows "disconnected"; balance $1,555.53.
+> - **X1:** still linked with zero transactions; closed 2024-09, so safe to remove whenever.
+> - **Citi checking 0628: it looks closed in early 2025, not renumbered.** Monthly statement emails for "primary account ending in 0628" (debit card ending 1192) run through the statement ending 2025-02-19 and then stop. The last activity I can see is the transfer request on 2024-12-03 (the $651 that landed in Chase). There is no closure email and no email mentioning a new account number. Every Citi email since is about the credit cards. If Citi's site shows no checking account, that matches.
+> - **Done 11-22 on your go:** set to "ignore everything" the Bilt balance transfer, the three PayPal rows and the two Apple Cash rows. That removes $6,600.90 of double counting.
+
+AKSEL: your proposed fix is fine by me
+
+**B. Investment and savings accounts (net worth only, not spending)**
+
+| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
+| --- | --- | --- | --- | --- | --- |
+| **Webull** (account ending WNM3) | Opened 2024-06-28; monthly statements through 2026-10; trade confirmation 2026-07-09; tax-document email 2026-01 | 2024-06 to now, **open** | No transfers to or from Chase under any Webull name | **Not linked.** Funding source unknown | synced - need to delete manual roth - done|
+| **Inspira Financial HSA** (via Aetna) | Identity-verification request from Inspira's HSA team 2026-01-05; "A message from Aetna/Inspira Financial" through 2026-11-06 | 2026-01 to now | None (the 14 INSPIRAFINANCIAL rows, $9,643.12, are COBRA premiums, already counted) | **Not linked.** A second HSA alongside the Fidelity one | couldn't connect - no account exists afaik -- please dounle check that no account exists |
+| Acorns | 1099 for tax year 2020 | 2020 to ? | None | Before history | synced - will delete soon |
+| Forge Global | "Welcome to Forge" 2026-04-29 | 2026 | None | Signup only, no sign of funding | ignore |
+
+> **Claude (checked 11-22):**
+> - **Webull: linked as a Roth IRA, $65,127.69.** Robinhood's Roth IRA 8811 shows $0, which fits it having been moved to Webull; that would also explain why nothing came from Chase.
+> - **Inspira HSA: I agree, I find no sign one exists, and my entry above was wrong.** All eleven Inspira emails outside the COBRA mailbox are either "COBRA documents are ready" notices (2025-06 to 2026-11) or a PayFlex password reset (2025-06-04). The one email from an "HSA CIP Member Requests" address (2026-01-05) asks you to resend proof of address as a PDF; it is an identity check and mentions no account, balance or contribution. There are no HSA statements, contribution notices or HSA tax forms (1099-SA, 5498-SA) from Inspira. The only open question is what you uploaded documents for in January.
+> - **Acorns:** linked, $0, no transactions.
+
+**C. Crypto**
+
+| Account | Evidence | Active | Seen in Rocket Money | Status | Aksel Progress |
+| --- | --- | --- | --- | --- | --- |
+| Crypto.com | Welcome 2022-03-16; deposits and USD withdrawals through 2022-06; login 2023-04 | 2022-03 to 2023 | $20.23 in; $1,306.42 back to Chase in June 2022 (ignored as transfers) | Deposits were before history | can't link, only has $2.5 |
+| Coinbase | Welcome 2020-12-31; BTC sent out 2021-01; ATOM sent out 2022-04-05; still emailing | 2020-12 to 2022+ | None | Crypto was moved off-exchange at least twice | not supported, i just withdrew all my money to my chase account |
+| Binance.US | Tax statements for 2022 and Q1 2023 | 2022 to 2023 | None | Taxable activity in 2022 | couldn't sign in, will try later from inside the US. balance is $0 |
+| Kraken | Activated 2021-04-19; new-device logins 2022-04 | 2021 to 2022 | None | couldn't link, $0 balance |
+| FTX.US | Identity verified 2021-07-19; bankruptcy notices 2023-07 to 2025-01 | 2021 | None | You were noticed as a possible creditor; I found no claim or payout email |
+| Self-custody wallets | Coinbase sends to an external BTC address and a Cosmos address | 2021 to 2022 | None | Can't be tracked from here |
+
+Aksel: what about keplr / walletmask / metamask / cosmos? I dabbled in some crypto coins in 2022/2023
+
+> **Claude (11-22), on Keplr / MetaMask / Cosmos:** wallets like these never email, so Gmail only shows the transfers into them.
+> - **Cosmos wallet `cosmos1eclwcdxftccglh93kzlg4cuvy3jzy4hcycr7nn`** (Keplr-style): Coinbase sent it 0.1 ATOM (2022-03-29) and 5.08 ATOM (2022-04-05). I looked the address up on the Cosmos Hub chain today: **balance 0, nothing staked.** The same wallet has separate addresses on Osmosis and other Cosmos chains that I can't derive from this one, so anything swapped into OSMO or pooled there wouldn't show. Opening Keplr would settle it.
+> - **Context:** family emails from 2021-08 to 2022-03 about converting HNT to Osmosis and yield farming ("Crypto introduction", "HNT to Osmosis flow chart"), which matches the timing.
+> - **Crypto.com** sent crypto out twice (2022-03-30 and 2022-04-17, "Crypto Withdrawal Succeeded"); I haven't opened those to see the coin or destination.
+AKSEL : please take a look at this to see where it went
+> - **Coinbase** sent 0.0287 BTC to an outside address on 2021-01-28.
+> - **MetaMask, Phantom, Ledger, Uniswap, OpenSea:** nothing in Gmail at all.
+> - Coinbase withdrawal to Chase that you just made: not in Rocket Money yet; I'll note it when it posts.
+
+Robinhood crypto is inside the linked Robinhood account. The "Celsius Class Ac Payouts" credit of $23.66 (2023-06-05) is a class-action payout; nothing in Gmail from Celsius Network, so I don't think you had an account there.
+
+**D. Betting and prediction markets**
+
+| Account | Evidence | Active | Seen in Rocket Money | Net to you | Aksel Progress |
+| --- | --- | --- | --- | --- |--- |
+| DraftKings | Welcome 2021-01-25; withdrawals 2023-03 and 2025-08-27 | 2021 to 2025 | In $7,000 (2023-03-07, 03-09); out $7,329.25 (2023-03-13) and $350 (2025-08-27) | +$679.25 | can't connect |
+| FanDuel | Verified 2021-12-31; withdrawal 2023-10-28 | 2021 to 2023 | In $100; out $380 (both 2023-10-30) | +$280 | can't connect |
+| Kalshi | Deposit notice 2024-07-08 | 2024 to now | In $100 (2024-07-08) and $102 (2026-02-09); out $98 (2024-07-19) | −$104 (the $102 may still be on the platform) |can't connect |
+| BetMGM (Pennsylvania) | "Important update regarding your deposit" 2023-03-09; dormant-account notices 2026-01 and 2026-03 | 2023-03 | None | Deposit seems to have failed; nothing reached the bank | can't connect |
+| Polymarket | Terms and promo emails 2026-09 to 2026-10 | 2026 | None | Account exists; crypto-funded, so invisible here | new account, no trades |
+
+Nothing found for Caesars, ESPN Bet, Fanatics, PrizePicks, Underdog or PredictIt.
+
+**Checked and not separate accounts:** J.P. Morgan "investments statement" emails are the linked Chase Roth IRA 8215. Wells Fargo "BILTCRDCRD" payments ($18,966.92, 2025-10 to 2026-01) are the old Wells Fargo Bilt card, which is linked (listed as Autograph 1880; last transaction 2026-02-19). Wise only has a feedback and privacy email (2026-06), no transfer. Splitwise Pay $722.23 (2023-07-13) is a payment to a person, not an account. Capital One "credit limit" emails are CreditWise monitoring. Nelnet is Columbia's tuition plan. WageWorks was a 2019 commuter benefit.
+
+**Not covered in this pass:** transfers to other institutions from inside Venmo, and accounts that only ever emailed another address (for example a work or school address).
+
+> **Outcome (11-22):**
+> - Linked by you: Bilt Blue Card 2132, Macy's Amex 3454, PayPal, Apple Cash, Webull Roth IRA, Acorns. Not linkable or failed: Amazon store card (still disconnected), Crypto.com, Coinbase, Binance.US, Kraken, the sportsbooks, Kalshi.
+> - Six double-counted rows ignored and noted ($6,600.90): Bilt balance transfer $3,188.13, three PayPal rows ($3,062.50, $52.28, $197.99), two Apple Cash rows ($90, $10). Rule written in `CATEGORIZATION.md` ("Pass-through wallets"): the card or bank row is counted, the wallet copy is ignored.
+> - Rent checked for 2025-12 to 2026-06: one counted rent charge per month (Bilt rent on the Wells Fargo card through February, then 114 East 28th St from checking). The only duplicate was February's rent inside the Bilt balance transfer, now ignored.
+> - Kalshi: your activity export confirms two separate $102 deposits on 2026-02-09 (both noted). All-time: $304 in, $98 out, $0.29 left.
+> - No Inspira HSA exists; Citi checking 0628 looks closed since early 2025; no Apple Card.
+
 
 ### Backfilled with the create-transaction tool (2026-11-22)
 
