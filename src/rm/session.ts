@@ -107,7 +107,7 @@ export function applySetCookies(jar: CookieJar, setCookies: string[]): void {
 }
 
 /**
- * Normalize whatever the user (or the browser extension) hands us into a Cookie
+ * Normalize whatever the user (or the login browser) hands us into a Cookie
  * header string. Accepts three shapes, most-to-least structured:
  *   1. a full Cookie header:  `tb.auth0.sid=abc; AWSALB=xyz`
  *   2. just the pair:         `tb.auth0.sid=abc`
@@ -122,8 +122,8 @@ export function normalizeCookieInput(raw: string): string {
 }
 
 /**
- * Seed a brand-new session from a cookie the user pasted into /auth or the
- * extension pushed to /auth/ingest. A freshly-exported cookie ALWAYS replaces
+ * Seed a brand-new session from a cookie the user pasted into /auth or a login
+ * run produced. A freshly-exported cookie ALWAYS replaces
  * stale persisted state. Returns an error message if the value is unusable, or
  * null on success.
  */

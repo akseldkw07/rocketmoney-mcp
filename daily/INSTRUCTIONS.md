@@ -25,7 +25,8 @@ because it names people and amounts.
 - **Venmo: reads, and requests for money I'm owed.** Reads: `get_transactions`,
   `get_outgoing_requests`, `get_pending_requests`, `get_friends`, `lookup_user`,
   `search_users`, `get_my_profile`. Requesting money (`request_money`, `split_request`) is
-  allowed, under sections 4a and 4c. Never call `send_money`, `complete_request`,
+  allowed, under section 4a only (section 4c's monthly items are reminders to me, never
+  requests). Never call `send_money`, `complete_request`,
   `deny_request`, `cancel_request` or `remind_request`: nothing that pays, or that changes
   a request someone else made.
 - **Venmo groups, through iPhone screen mirroring: add expenses only, under section 4c.**
@@ -297,27 +298,26 @@ Full example:
 $80 | changes: category Shopping -> Travel (daily 2026-11-08) | for: homecoming trip |
 return by 2026-12-01`
 
-## 4c. First of the month: recurring requests and shared bills
+## 4c. First of the month: recurring reminders and shared bills
 
 Runs once a month: on the first run on or after the 1st whose month has no
 `### First of the month` section in `LOG.local.md` yet (so a skipped day still runs it,
-and a second run the same month doesn't repeat it). The people, amounts and group names
-are in `../CATEGORIZATION.local.md` under "Monthly requests and shared bills".
+and a second run the same month doesn't repeat it). The people, notes and group names
+are in `../CATEGORIZATION.local.md` under "Monthly reminders and shared bills".
 
-**1. Recurring Venmo requests.** For each row of the "Monthly requests" table:
-- **Already done?** Skip it if `get_outgoing_requests` has an open request to that person
-  with this month's note, or `get_transactions(with_user_id=…, note_contains=…)` shows
-  that note paid or requested already. Notes follow the table's pattern, so the check is
-  exact.
-- **Amount.** Only from the source the table names (a bill's line item, a fixed amount).
-  Never estimate it and never reuse last month's amount as a stand-in. If the source
-  can't be read, don't request: add a review item and push "Can't read <bill> for
-  <person>'s request; last month was $X, bill total $Y". Repeat each run until it's sent.
-- **Send** with `request_money` (private), the friend id from `get_friends`, and the
-  table's note. These count toward §4a's limit of 3 requests per run; the $500 cap and the
-  friend check apply too. On the Rocket Money side, the bill's note gets
-  `split: <person> $X requested <MM-DD>` (§4b), and the payment, when it arrives, is
-  filed like any repayment (§3).
+**1. Recurring reminders (notify me; never request).** For each row of the "Monthly
+reminders" table, I ask for the money myself. Never call `request_money` or
+`split_request` for these, whatever the amount source says.
+- **Already paid?** Skip it if `get_transactions(with_user_id=…, note_contains=…)` shows
+  this month's note paid already (or `get_outgoing_requests` shows I've requested it).
+  Notes follow the table's pattern, so the check is exact.
+- **Otherwise, remind me once:** one push and one review item, "Time to request <person>
+  for <what> <Month>" plus whatever context the table's source gives (e.g. the bill's
+  total and date, and last month's amount). Don't work out or suggest the amount beyond
+  that. Once a month only: the `### First of the month` log section is the record that
+  it was sent, so later runs that month don't repeat it.
+- When the payment arrives, it's filed like any repayment (§3), and the bill's note gets
+  `split: <person> paid $X <MM-DD>` (§4b).
 
 **2. Shared household bills to a Venmo group.** For each bill in the "Shared bills" table:
 - **Find last month's charge** in Rocket Money (`search_transactions(query=<name on
@@ -342,7 +342,7 @@ are in `../CATEGORIZATION.local.md` under "Monthly requests and shared bills".
   charges I paid. Anything else that looks shared goes under needs review.
 
 Log both parts under a `### First of the month` heading in that day's entry (§7): each
-request or expense sent, skipped (and why) or blocked.
+reminder sent or skipped (and why), and each expense added, skipped or blocked.
 
 ## 5. Spot patterns and propose rules
 

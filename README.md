@@ -18,8 +18,7 @@ Your Rocket Money session cookie is a live login to your finances. This server
 holds it on disk and sends it only to Rocket Money's API, so **run the server
 yourself, on a machine you control**, and put its `/auth` and `/mcp` endpoints
 behind authentication. There is no hosted instance: nothing in this repo points
-at a server the author operates, and the Chrome extension refuses to send the
-cookie anywhere until you enter your own server's URL.
+at a server the author operates.
 
 ## Tools
 
@@ -209,8 +208,10 @@ server; the cookie is sent only to Rocket Money's own API.
 | `GET /api/budget` | Budgets, recurring merchants, upcoming bills and spending in one read (same token) |
 | `GET /healthz` | Health check |
 
-`/auth/ingest` (the Chrome extension's push target) is **not registered in this
-build**: it accepted requests from any website. See Known shortcomings.
+There is no endpoint that accepts a session pushed from a browser: upstream's
+`/auth/ingest` (fed by its Chrome extension) accepted requests from any website, so
+this build dropped it, and removed the extension on 2026-11-22. Paste a cookie at
+`/auth`, or let auto-login and silent renewal keep the session.
 
 ## Running locally
 
@@ -287,15 +288,10 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   server renews it silently every 40 minutes (and auto-login covers the rest). It
   depends on a stored password and on Auth0 not tightening bot detection; if that
   changes, logins fail until it is fixed.
-- **Chrome extension is orphaned.** `extension/` still pushes to `/auth/ingest`, which
-  this build no longer registers. Paste at `/auth` or rely on auto-login instead.
 - **Query hashes rotate.** Reads fall back to bundled query text, which keeps working
   until Rocket Money changes the schema itself; refreshing the hashes is a HAR capture
   plus `npm run refresh-hashes` (see Notes).
 - **Subscriptions can't be marked cancelled** through the API (see above), only deleted.
-- **No CI.** Tests (`npm test`) and the typecheck only run locally: the `mcp-utils`
-  dependency is a private repo, so a GitHub Actions run can't install it without a
-  token (see TODO.md).
 - **USD only.**
 
 ## TODO

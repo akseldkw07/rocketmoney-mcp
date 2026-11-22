@@ -73,16 +73,17 @@ From README's TODO section:
 - [x] Apply upstream Dependabot bumps (notably MCP SDK 1.32.0). *Done:* the SDK is at
       1.32.2 (bumps applied with the upstream merge, PR #18); 2026-11-22 also took the
       in-range patch updates and fixed the two moderate `hono` advisories (a transitive
-      SDK dependency), so `npm audit` is clean. Still open: enabling Dependabot on the
-      fork.
-- [ ] Remove `extension/`, or bring back `/auth/ingest` behind authentication. *Needs a
-      decision.*
+      SDK dependency), so `npm audit` is clean. Dependabot is on as of 2026-11-22
+      (`.github/dependabot.yml`: npm, grouped, and the pinned actions, monthly).
+- [x] Remove `extension/`, or bring back `/auth/ingest` behind authentication. *Done
+      2026-11-22 (chore/ci-extension-monthly): removed.* Auto-login and silent renewal
+      cover what it did; git history keeps it.
 - [x] Timestamp the server log. *Done 2026-11-22 (F10).*
-- [ ] Add CI for `npm test` and `npm run typecheck`. *Blocked:* `mcp-utils` is a private
-      repo and this one is public, so a GitHub Actions run can't `npm ci` without a
-      read-only token in a repo secret (or `mcp-utils` made public). Decide which, then
-      add `.github/workflows/ci.yml` (Node 20+, `npm ci`, `npm run typecheck`,
-      `npm test`).
+- [x] Add CI for `npm test` and `npm run typecheck`. *Done 2026-11-22
+      (chore/ci-extension-monthly):* `.github/workflows/ci.yml` on pull requests and
+      pushes to main. `mcp-utils` stays private: `mcp-utils/scripts/grant-ci-access.sh`
+      added a read-only deploy key there and the `MCP_UTILS_DEPLOY_KEY` secret here
+      (Actions and Dependabot), loaded into an ssh-agent before `npm ci`.
 - [x] Treat local-network timeouts/resets as offline without hiding real Rocket Money
       failures. *Done 2026-11-22 (PR #29):* `src/rm/network.ts`. Each browser
       run (login steps and renewals) is preceded by one HEAD request to
