@@ -276,9 +276,11 @@ then A2-A4 (need the rotation investigation and more care), then E.
       2026-11-08 (`scripts/check-rules.ts`). Live run 2026-11-08: 9,136 transactions,
       23 rules, no conflicts, so precedence is still unjudged. It finds the server's
       session by itself (Fly volume, else the Mac's launchd folder).*
-- [ ] **F8. `/api/transactions` rows still use the old shape** (no `original_date`,
-      `ignore`, `account`; nulls included). Switch to the shared `rows.ts` shape once the
-      card gate on lockbox is updated to accept it; that's the one consumer.
+- [x] **F8. `/api/transactions` rows still use the old shape** (no `original_date`,
+      `ignore`, `account`; nulls included). *Closed 2026-11-22, not applicable:* the only
+      consumer was a script on the upstream author's own machine. This fork doesn't set
+      `ROCKETMONEY_API_TOKEN`, so the endpoint answers 401 to everything and nothing reads
+      it here. Left as is to stay close to upstream.
 - [x] **F9. `TransactionCategories` and the other 10 reads still use persisted hashes.**
       They fall back to query text when a hash goes stale, so nothing breaks, but each
       rotation costs a failed request per operation until `npm run refresh-hashes` runs.
