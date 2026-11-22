@@ -66,8 +66,28 @@ linked app needs transfer rules.
 | Venmo | Yes | Payments on the Venmo account; `Standard transfer` there; `VENMO CASHOUT` / `VENMO PAYMENT` on the bank | Payments by purpose; the transfer rows → `Venmo`, ignored |
 | Zelle | n/a (bank to bank) | `Zelle payment to …` / `Zelle payment from …` on the bank | Every row is a real payment: file by purpose. Rocket Money files incoming Zelle as `Internal Transfers`, which is ignored, so always recategorize. |
 | Cash App | No | `CASH APP*…` on a bank or card | Real payment: file by purpose |
-| PayPal | No | `PAYPAL INST XFER …` (sent to a person), `PAYPAL TRANSFER` (money in from people), `PAYPAL *MERCHANT` (a purchase) | Person-to-person rows by purpose; `PAYPAL *MERCHANT` is an ordinary purchase |
-| Apple Cash | No | `APPLE CASH SENT MONEY` (sent), `APPLE CASH` (topping up the balance), `APPLE CASH BANK XFER` (balance cashed out = money received from people) | All real money to or from people: file by purpose |
+| PayPal | Yes (since 2026-11-22) | `Payment to …` on the PayPal account; `PAYPAL *MERCHANT` on a card; `… IAT PAYPAL` / `PAYPAL INST XFER` / `PAYPAL TRANSFER` on the bank | See "Pass-through wallets" below: the card or bank row is the counted one, the PayPal copy is ignored. Rows that exist only on PayPal (paid from balance, credits received) by purpose |
+| Apple Cash | Yes (since 2026-11-22) | `Transfer` on the Apple Cash account; `APPLE CASH SENT MONEY`, `APPLE CASH`, `APPLE CASH BANK XFER` on the bank | Same as PayPal: the bank row is the counted one, the Apple Cash copy is ignored |
+
+### Pass-through wallets (PayPal, Apple Cash): one row per payment
+
+When a wallet is linked and a payment made through it is funded by a card or the bank, the
+same payment shows twice: once on the wallet and once on the funding account. Count it once.
+
+- **Keep the funding-account row** (the card or bank row, e.g. `PAYPAL *MCCUNERANCH` on
+  Amex, `APPLE CASH SENT MONEY` on checking). File it by purpose; it carries the note,
+  the split and any re-dating. It is the side that exists for the whole history, and the one
+  that ties to the card statement.
+- **Ignore the wallet copy** with `set_transaction_ignore(…, "everything")` and a note
+  naming the row it duplicates. Leave its category alone.
+- **Match on** the same amount within about two days. A bank-funded payment in another
+  currency can differ slightly; a small difference can also be wallet balance used up.
+- **A wallet row with no funding-account match is real** (paid from the wallet balance, or a
+  credit received into it): count it and file it by purpose.
+- Balance moves between the wallet and the bank are transfers: `Venmo` category, ignored.
+- The same applies to any wallet or pay-later service linked in future, and to a card
+  balance moved to a new card (a `Balance Transfer` row is ignored; the purchases are
+  already on the old card).
 
 If an app that isn't linked today gets linked later, add the same pair of rules Venmo has:
 its balance-to-bank transfer row on the app account → `Venmo` (ignored), and its name on the
