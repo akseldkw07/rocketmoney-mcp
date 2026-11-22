@@ -9,3 +9,5 @@ node_modules/
 .claude/
 # Personal categorization specifics (names, ids, rent) - see CATEGORIZATION.md
 *.local.md
+local/
+scratch/
