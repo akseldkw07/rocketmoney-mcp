@@ -40,6 +40,7 @@ test("toRMTransaction reads ignore state, applied rules and both dates", () => {
       accountId: "a",
       ignoredFrom: "budget",
       ruleIds: ["r1", "r2"],
+      splitParentId: null,
     },
   );
   assert.equal(toRMTransaction({ id: "x" }), null);
@@ -87,4 +88,9 @@ test("a non-transaction id is refused with a clear reason and never sent to Rock
   assert.equal(sent.length, 1);
   assert.deepEqual(Object.values(sent[0].variables as object), [{ transactionNodeId: real, note: "y" }]);
   assert.deepEqual(partitionTransactionIds(["bogus", real]).valid, [real]);
+});
+
+test("toRMTransaction reads a split part's parent", () => {
+  const t = toRMTransaction({ id: "c", amount: 1, date: "2026-11-22", splitParentTransaction: { id: "p" } });
+  assert.equal(t?.splitParentId, "p");
 });

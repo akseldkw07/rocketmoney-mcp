@@ -49,6 +49,7 @@ export function toRMTransaction(o) {
         accountId: account?.id ?? null,
         ignoredFrom: o.ignoredFrom ?? null,
         ruleIds: Array.isArray(o.transactionRuleNodeIds) ? o.transactionRuleNodeIds : [],
+        splitParentId: o.splitParentTransaction?.id ?? null,
     };
 }
 /** Every Transaction field toRMTransaction reads. Shared by search and rule previews. */
@@ -64,7 +65,8 @@ export const TRANSACTION_FIELDS = `__typename
   ignoredFrom
   transactionRuleNodeIds
   category { id label __typename }
-  account { id __typename }`;
+  account { id __typename }
+  splitParentTransaction { id __typename }`;
 // The transactions-page query cut down to what RMTransaction reads, plus
 // posted_date (the bank date, which survives a date change) and custom_name.
 // Sent as full text, so it doesn't depend on a persisted hash. `gteDate` and

@@ -57,6 +57,8 @@ export interface RMTransaction {
   ignoredFrom: string | null;
   /** Rule ids that have applied to this transaction, in RM's order. */
   ruleIds: string[];
+  /** For a part of a split, the split parent's id (search returns the parts, not the parent). */
+  splitParentId?: string | null;
 }
 
 /** One Transaction node (LightTransaction fragment) -> RMTransaction, or null if it lacks the basics. */
@@ -76,6 +78,7 @@ export function toRMTransaction(o: Record<string, unknown>): RMTransaction | nul
     accountId: account?.id ?? null,
     ignoredFrom: (o.ignoredFrom as string | null) ?? null,
     ruleIds: Array.isArray(o.transactionRuleNodeIds) ? (o.transactionRuleNodeIds as string[]) : [],
+    splitParentId: (o.splitParentTransaction as { id?: string } | null | undefined)?.id ?? null,
   };
 }
 
@@ -92,7 +95,8 @@ export const TRANSACTION_FIELDS = `__typename
   ignoredFrom
   transactionRuleNodeIds
   category { id label __typename }
-  account { id __typename }`;
+  account { id __typename }
+  splitParentTransaction { id __typename }`;
 
 // The transactions-page query cut down to what RMTransaction reads, plus
 // posted_date (the bank date, which survives a date change) and custom_name.

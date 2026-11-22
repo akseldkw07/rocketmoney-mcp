@@ -291,21 +291,29 @@ then A2-A4 (need the rotation investigation and more care), then E.
       chain, and the stack for non-RM errors), and the per-item "An error occurred."
       rewording now quotes RM's text. Split out: F13 (splits), F14 (Cash account label).
 
-- [ ] **F13. Split transactions (separate PR).** `create_transaction` can't split a
-      row, and no tool splits a synced one either. The web bundle has
-      `SplitTransactionMutation($input: SplitTransactionInput!)` and
-      `UnsplitTransactionMutation`; a split comes back as `splitTransactions` on the
-      parent (each with amount, category, note, name). To do: read the input shape from
-      validation errors (as for F12), test on a $0.02 manual `TEST` row split in two,
-      then add `split_transaction` / `unsplit_transaction` and a `splits` option on
-      `create_transaction`. Check how split children show in `search_transactions` and
-      spending (the parent should stop counting) before shipping.
+- [x] **F13. Split transactions.** *Done 2026-11-22 (feat/split-transactions):*
+      `split_transaction`, `unsplit_transaction` and a `splits` option on
+      `create_transaction` (`src/rm/splits.ts`, whose header records the API and the live
+      behavior). Inputs, from validation errors: `splitTransaction { transactionNodeId,
+      splitStatus: parent | child | child_equal | child_percent, splits: [{ amount
+      (cents, parent's sign), transactionCategoryNodeId, customName, note, ignoredFrom }] }`
+      and `unsplitTransaction { transactionNodeId }`. Tested live on $0.02-$0.03 manual
+      `TEST` rows, all deleted: the parent stops counting and drops out of search while
+      the parts count (spending moved by the total once); parts that don't add up are
+      refused (`USER_ERROR`), as is a part with no category (`REQUIRED_VALUE_ERROR`);
+      re-splitting replaces the parts. Found and handled: unsplitting by a part's id
+      half-detaches it (so unsplit always resolves to the parent), and parts read
+      `manual: true`, so `delete_transaction` now refuses them (deleting one leaves the
+      split not adding up); deleting a split parent deletes its parts. Search rows gain
+      `split_of` (the parent's id). Not tested live: splitting a bank-synced transaction.
 
-- [ ] **F14. Label the manual "Cash" account.** `create_transaction` without
-      `account_id` files rows under a manual "Cash" account Rocket Money creates. It
-      isn't in `list_accounts`, so its rows read `(switched off) <id>` (F11). `node(id:)`
-      does return its name and `source: manual`, so `accountLabels()` could look up any
-      account id it doesn't know that way.
+- [x] **F14. Label the manual "Cash" account.** *Done 2026-11-22
+      (feat/split-transactions):* `labelUnknownAccounts()` in `src/rm/rows.ts` looks up
+      any account id missing from the enabled list with `node(id:)` (cached like the
+      list) and labels it `Cash (manual) <id>` or `(switched off) <institution name
+      number> <id>`; ids RM has nothing for keep `(switched off) <id>`, and a failed lookup
+      is reported in the result's `warning`. This also finishes F11's "real names for
+      switched-off accounts" (live: three switched-off cards now show their names).
 
 ## Second sweep (2026-10-29, after PR #7)
 
