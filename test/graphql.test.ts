@@ -1,6 +1,6 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { batchAliased } from "../src/rm/graphql.js";
+import { batchAliased, probeSession, RMGraphQLError } from "../src/rm/graphql.js";
 import { getBudgets } from "../src/rm/client.js";
 import { freshSession, mockGraphQL, realFetch } from "./helpers.js";
 
@@ -34,17 +34,22 @@ test("batchAliased sends 50 aliases per request and keeps per-item failures to t
   assert.deepEqual(out[59], { ok: true, data: { id: "t59" } });
 });
 
-test("a rotated persisted hash falls back to the bundled query text", async () => {
+test("reads send the bundled query text, never a persisted hash (F9)", async () => {
   freshSession();
-  const bodies = mockGraphQL((b) =>
-    b.query ? { data: { viewer: { id: "v1" } } } : { errors: [{ message: "PersistedQueryNotFound" }] },
-  );
+  const bodies = mockGraphQL(() => ({ data: { viewer: { id: "v1" } } }));
 
   assert.deepEqual(await getBudgets(), { viewer: { id: "v1" } });
-  assert.equal(bodies.length, 2);
-  assert.ok((bodies[0].extensions as { persistedQuery?: unknown }).persistedQuery);
-  assert.match(String(bodies[1].query), /^query Budgets/);
-  assert.deepEqual(bodies[1].variables, bodies[0].variables);
+  assert.equal(bodies.length, 1, "one request: nothing to fall back from");
+  assert.equal(bodies[0].operationName, "Budgets");
+  assert.match(String(bodies[0].query), /^query Budgets/);
+  assert.equal(bodies[0].extensions, undefined);
+});
+
+test("the session probe sends query text too", async () => {
+  const bodies = mockGraphQL(() => ({ data: { viewer: { id: "v1" } } }));
+  assert.ok(await probeSession("tb.auth0.sid=abc"));
+  assert.match(String(bodies[0].query), /^query AuthenticationCheck/);
+  assert.equal(bodies[0].extensions, undefined);
 });
 
 test("RM calls run in parallel, at most 4 in flight", async () => {
@@ -60,4 +65,22 @@ test("RM calls run in parallel, at most 4 in flight", async () => {
   await Promise.all(Array.from({ length: 10 }, () => getBudgets()));
   assert.equal(peak, 4);
   assert.equal(inFlight, 0);
+});
+
+test("a read RM rejects as invalid says to regenerate the text, and keeps RM's errors", async () => {
+  freshSession();
+  const errors = [{ message: 'Cannot query field "foo" on type "User".', extensions: { code: "GRAPHQL_VALIDATION_FAILED" } }];
+  mockGraphQL(() => ({ errors }));
+  await assert.rejects(getBudgets(), (err: unknown) => {
+    assert.ok(err instanceof RMGraphQLError);
+    assert.match(err.message, /Cannot query field "foo".*npm run refresh-query-text/);
+    assert.deepEqual(err.errors, errors);
+    return true;
+  });
+});
+
+test("any other RM error on a read passes through unchanged", async () => {
+  freshSession();
+  mockGraphQL(() => ({ errors: [{ message: "An error occurred.", extensions: { code: "INTERNAL" } }] }));
+  await assert.rejects(getBudgets(), (err: unknown) => err instanceof RMGraphQLError && !/refresh-query-text/.test(err.message));
 });

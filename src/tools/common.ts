@@ -2,7 +2,7 @@
 // (the last two from mcp-utils).
 
 import { z } from "zod";
-import { RMAuthError, RMGraphQLError, PersistedQueryNotFoundError } from "../rm/client.js";
+import { RMAuthError, RMGraphQLError } from "../rm/client.js";
 
 export const AUTH_HINT =
   "Rocket Money session is not active. Open this server's /auth page and paste a fresh `tb.auth0.sid` cookie from a logged-in app.rocketmoney.com browser tab. " +
@@ -18,7 +18,7 @@ export const READ_ONLY = /^(1|true|yes)$/i.test(process.env.ROCKETMONEY_READ_ONL
  */
 export function describeError(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
-  const fromRM = err instanceof RMGraphQLError || err instanceof PersistedQueryNotFoundError;
+  const fromRM = err instanceof RMGraphQLError;
   const parts = [fromRM ? String(err) : (err.stack ?? String(err))];
   if (err instanceof RMGraphQLError && err.errors.length) parts.push(`GraphQL errors: ${JSON.stringify(err.errors)}`);
   if (err.cause !== undefined) {
