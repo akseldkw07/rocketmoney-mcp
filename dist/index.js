@@ -39,9 +39,9 @@ app.post("/auth/submit", submitAuth);
 app.post("/auth/login", triggerLogin); // trigger headless auto-login
 app.post("/auth/otp", postOtp); // feed an SMS code to a parked login run
 app.post("/auth/sms", smsWebhook); // phone SMS-forwarder posts the RM code here (shared-secret guarded)
-// ── JSON API for the browser extension ─────────────────────────────
-// Removed in this local build: /auth/ingest and /auth/status were open to any
-// website (CORS *), and the session is pasted at /auth instead.
+// No browser-extension endpoints: upstream's /auth/ingest and /auth/status were
+// open to any website (CORS *). The session is pasted at /auth or comes from
+// auto-login; the extension itself was removed 2026-11-22.
 // ── Token-guarded JSON API (last N days of transactions) ───────────
 // Auth is the ROCKETMONEY_API_TOKEN bearer/?token= check inside the handler,
 // NOT Cloudflare Access - this is meant for unattended script callers.

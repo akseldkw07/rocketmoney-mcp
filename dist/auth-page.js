@@ -87,8 +87,8 @@ is never sent anywhere but Rocket Money's API.</p>
   <li>Copy the value of <code>tb.auth0.sid</code> (just the value is fine - no <code>name=</code> needed). Pasting the whole <code>Cookie:</code> request header from a GraphQL request also works and is a bit more robust.</li>
   <li>Paste it below and save.</li>
 </ol>
-<p style="font-size:13px;opacity:.8">Tip: install the Rocket Money MCP browser extension and this becomes automatic -
-it keeps the session fresh while you're logged in, no pasting.</p>
+<p style="font-size:13px;opacity:.8">Tip: with auto-login on (<code>ROCKETMONEY_AUTO_LOGIN=1</code>), the server signs in
+and renews the session by itself; pasting here is only a fallback.</p>
 <form method="post" action="/auth/submit">
   <textarea name="cookie" placeholder="paste the tb.auth0.sid value (or the full Cookie header)" autofocus></textarea>
   <button type="submit">Save session</button>
