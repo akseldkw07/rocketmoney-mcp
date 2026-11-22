@@ -27,7 +27,7 @@ export function partitionTransactionIds(ids) {
 /** RM's masked per-item error, reworded for a well-formed transaction id it still refused. */
 function explainItemError(message) {
     if (!message || /^An error occurred\.?$/.test(message.trim())) {
-        return "Rocket Money refused it: no such transaction, or not one of yours (it only says \"An error occurred.\")";
+        return `Rocket Money said ${JSON.stringify(message ?? "(no error text)")}; for a well-formed id that usually means no such transaction, or not one of yours`;
     }
     return message;
 }

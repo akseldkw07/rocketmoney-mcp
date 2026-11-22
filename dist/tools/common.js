@@ -1,13 +1,31 @@
 // Helpers every tool file shares: the result wrapper, annotations, batch results
 // (the last two from mcp-utils).
 import { z } from "zod";
-import { RMAuthError } from "../rm/client.js";
+import { RMAuthError, RMGraphQLError, PersistedQueryNotFoundError } from "../rm/client.js";
 export const AUTH_HINT = "Rocket Money session is not active. Open this server's /auth page and paste a fresh `tb.auth0.sid` cookie from a logged-in app.rocketmoney.com browser tab. " +
     "If a freshly pasted cookie still fails with `HTTP 401 on AuthenticationCheck`, suspect a stale x-truebill-web-client-version instead: re-capture it from a graphql request in DevTools and set ROCKETMONEY_WEB_CLIENT_VERSION.";
 /** With ROCKETMONEY_READ_ONLY=1 the write tools are never registered, so a client cannot reach them. */
 export const READ_ONLY = /^(1|true|yes)$/i.test(process.env.ROCKETMONEY_READ_ONLY ?? "");
 /**
- * Wrap a tool body so RMAuthError becomes a clean, actionable MCP error.
+ * The full text of a tool failure, so it can be debugged from the client: RM's
+ * GraphQL errors as returned (path, extensions), the stack for anything that
+ * isn't an RM error, and the chain of causes. Nothing is reworded or dropped.
+ */
+export function describeError(err) {
+    if (!(err instanceof Error))
+        return String(err);
+    const fromRM = err instanceof RMGraphQLError || err instanceof PersistedQueryNotFoundError;
+    const parts = [fromRM ? String(err) : (err.stack ?? String(err))];
+    if (err instanceof RMGraphQLError && err.errors.length)
+        parts.push(`GraphQL errors: ${JSON.stringify(err.errors)}`);
+    if (err.cause !== undefined) {
+        parts.push(`Caused by: ${err.cause instanceof Error ? describeError(err.cause) : JSON.stringify(err.cause)}`);
+    }
+    return parts.join("\n");
+}
+/**
+ * Wrap a tool body so RMAuthError becomes a clean, actionable MCP error and any
+ * other failure comes back whole (describeError).
  * Results are compact JSON: indenting added ~30-40% to every response, which on
  * a 1,200-row search is hundreds of KB the client has to carry.
  */
@@ -18,7 +36,7 @@ export function tool(fn) {
             return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
         catch (err) {
-            const msg = err instanceof RMAuthError ? `${AUTH_HINT}\n\n(${err.message})` : String(err);
+            const msg = err instanceof RMAuthError ? `${AUTH_HINT}\n\n(${err.message})` : describeError(err);
             return { content: [{ type: "text", text: msg }], isError: true };
         }
     };
