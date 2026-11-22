@@ -76,11 +76,11 @@ From README's TODO section:
       SDK dependency), so `npm audit` is clean. Dependabot is on as of 2026-11-22
       (`.github/dependabot.yml`: npm, grouped, and the pinned actions, monthly).
 - [x] Remove `extension/`, or bring back `/auth/ingest` behind authentication. *Done
-      2026-11-22 (chore/ci-extension-monthly): removed.* Auto-login and silent renewal
+      2026-11-22 (PR #30): removed.* Auto-login and silent renewal
       cover what it did; git history keeps it.
 - [x] Timestamp the server log. *Done 2026-11-22 (F10).*
 - [x] Add CI for `npm test` and `npm run typecheck`. *Done 2026-11-22
-      (chore/ci-extension-monthly):* `.github/workflows/ci.yml` on pull requests and
+      (PR #30):* `.github/workflows/ci.yml` on pull requests and
       pushes to main. `mcp-utils` stays private: `mcp-utils/scripts/grant-ci-access.sh`
       added a read-only deploy key there and the `MCP_UTILS_DEPLOY_KEY` secret here
       (Actions and Dependabot), loaded into an ssh-agent before `npm ci`.
