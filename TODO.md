@@ -84,7 +84,7 @@ From README's TODO section:
       add `.github/workflows/ci.yml` (Node 20+, `npm ci`, `npm run typecheck`,
       `npm test`).
 - [x] Treat local-network timeouts/resets as offline without hiding real Rocket Money
-      failures. *Done 2026-11-22 (fix/network-blips):* `src/rm/network.ts`. Each browser
+      failures. *Done 2026-11-22 (PR #29):* `src/rm/network.ts`. Each browser
       run (login steps and renewals) is preceded by one HEAD request to
       app.rocketmoney.com; no answer (Node/undici codes, Chrome `net::ERR_` blips,
       timeouts) means offline: no browser, no window, no backoff or cooldown. Any HTTP
