@@ -291,7 +291,7 @@ then A2-A4 (need the rotation investigation and more care), then E.
       chain, and the stack for non-RM errors), and the per-item "An error occurred."
       rewording now quotes RM's text. Split out: F13 (splits), F14 (Cash account label).
 
-- [x] **F13. Split transactions.** *Done 2026-11-22 (feat/split-transactions):*
+- [x] **F13. Split transactions.** *Done 2026-11-22 (PR #26):*
       `split_transaction`, `unsplit_transaction` and a `splits` option on
       `create_transaction` (`src/rm/splits.ts`, whose header records the API and the live
       behavior). Inputs, from validation errors: `splitTransaction { transactionNodeId,
@@ -308,7 +308,7 @@ then A2-A4 (need the rotation investigation and more care), then E.
       `split_of` (the parent's id). Not tested live: splitting a bank-synced transaction.
 
 - [x] **F14. Label the manual "Cash" account.** *Done 2026-11-22
-      (feat/split-transactions):* `labelUnknownAccounts()` in `src/rm/rows.ts` looks up
+      (PR #26):* `labelUnknownAccounts()` in `src/rm/rows.ts` looks up
       any account id missing from the enabled list with `node(id:)` (cached like the
       list) and labels it `Cash (manual) <id>` or `(switched off) <institution name
       number> <id>`; ids RM has nothing for keep `(switched off) <id>`, and a failed lookup
