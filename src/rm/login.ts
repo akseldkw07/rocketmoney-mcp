@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { addExtra } from "puppeteer-extra";
 import Stealth from "puppeteer-extra-plugin-stealth";
 import vanilla, { type Browser, type Page } from "rebrowser-puppeteer-core";
-import { seedSession, sessionStatus } from "./session.js";
+import { seedSession, sessionStatus, type SessionStatus } from "./session.js";
 import { probeSession } from "./graphql.js"; // circular; runtime-only use
 
 // Auth0/Cloudflare bot-detection flags plain headless Chromium (the CDP
@@ -134,6 +134,7 @@ export interface LoginResult {
   needsOtp?: boolean; // a run is (or was) waiting for an SMS code
   reachedMfa?: boolean; // the run got as far as the SMS challenge
   offline?: boolean; // the machine had no network; another browser won't help
+  needsForm?: boolean; // a silent renewal met the login form (the Auth0 sign-in had lapsed)
   error?: string;
 }
 
@@ -220,6 +221,53 @@ export function attemptLogin(reason: string, force = false): Promise<LoginResult
   return inFlight;
 }
 
+// ── Proactive silent renewal ───────────────────────────────────────
+// Two cookies decide whether a re-login is silent (checked in the login profile,
+// 2026-11-22): the app session tb.auth0.sid lives 4h, but Auth0's own sign-in
+// cookie `auth0` (auth.rocketaccount.com) lives only 1h from its last use. The
+// app session dies well before 4h in practice (401 on RefreshAuthToken, ~328
+// times in a month), and once `auth0` has lapsed the re-login needs the form,
+// which headless Chrome gets a "Verify you are human" check on, so it fell back
+// to a visible window. A silent renewal (drop the app cookie, load the app, let
+// it sign in through Auth0) takes ~8s headless, gives a fresh 4h app session and
+// pushes `auth0` out another hour (12:28 -> 13:18 in the 2026-11-22 test). Doing
+// one every RENEW_AFTER (index.ts) keeps both alive, so the form never comes up.
+
+/** True when a live session is old enough to renew. renewAfterMs <= 0 switches renewal off. */
+export function renewDue(s: Pick<SessionStatus, "status" | "seededAt">, now: number, renewAfterMs: number): boolean {
+  if (renewAfterMs <= 0 || s.status !== "live" || !s.seededAt) return false;
+  return now - Date.parse(s.seededAt) >= renewAfterMs;
+}
+
+const RENEW_RETRY_MS = 15 * 60 * 1000;
+let lastRenewAttempt = 0;
+
+/**
+ * Silently renew a live session in the background: headless (unless the mode is
+ * headful-only), never fills the login form, never opens a window. If Auth0 asks
+ * for the form, it gives up (needsForm) and leaves that to the normal login when
+ * the session dies. Shares the login lock, so it never runs beside a login, and
+ * its failures don't add to the login backoff. At most one try per 15 minutes.
+ */
+export function renewSession(reason: string): Promise<LoginResult> {
+  if (inFlight) return inFlight;
+  if (!autoLoginConfigured()) return Promise.resolve({ ok: false, error: "auto-login not configured" });
+  const wait = RENEW_RETRY_MS - (Date.now() - lastRenewAttempt);
+  if (wait > 0) return Promise.resolve({ ok: false, error: `renewal rate-limited; next try in ${Math.ceil(wait / 60000)}m` });
+  lastRenewAttempt = Date.now();
+  inFlight = doLogin(reason, HEADLESS() !== "0", true)
+    .catch((e): LoginResult => ({ ok: false, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }))
+    .then((r) => {
+      if (r.ok) failures = 0;
+      recordResult(reason, r);
+      return r;
+    })
+    .finally(() => {
+      inFlight = null;
+    });
+  return inFlight;
+}
+
 /**
  * One login per the HEADLESS mode. A failed headless run is retried headless
  * once: on macOS the headless browser has disconnected right after a SUCCESSFUL
@@ -240,6 +288,47 @@ async function runLogin(reason: string): Promise<LoginResult> {
 }
 
 // ── DOM helpers ────────────────────────────────────────────────────
+/** The first of `selectors` that is on screen right now, or null (one look, no waiting). */
+async function visibleNow(page: Page, selectors: string[]) {
+  for (const sel of selectors) {
+    const el = await page.$(sel);
+    if (el && (await el.boundingBox())) return el;
+  }
+  return null;
+}
+
+/**
+ * Wait for whichever comes first: a working session (checked first on every
+ * tick) or the login form. The app's silent sign-in often finishes several
+ * seconds after the page loads (7.7s in the 2026-11-22 test); checking for a
+ * session only once at the start, then waiting for the form alone, reported
+ * a finished warm renewal (dashboard on screen) as "no login form". A check
+ * that throws (page mid-navigation) just skips that tick.
+ */
+export async function waitForSessionOrForm<F>(o: {
+  accept: () => Promise<boolean>;
+  findForm: () => Promise<F | null>;
+  timeoutMs: number;
+  tickMs: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<{ kind: "session" } | { kind: "form"; form: F } | { kind: "neither" }> {
+  const now = o.now ?? Date.now;
+  const pause = o.sleep ?? sleep;
+  const deadline = now() + o.timeoutMs;
+  for (;;) {
+    try {
+      if (await o.accept()) return { kind: "session" };
+      const form = await o.findForm();
+      if (form) return { kind: "form", form };
+    } catch {
+      // mid-navigation; try again next tick
+    }
+    if (now() >= deadline) return { kind: "neither" };
+    await pause(o.tickMs);
+  }
+}
+
 async function firstVisible(page: Page, selectors: string[], timeout = 12000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -305,7 +394,7 @@ export function makeSessionAcceptor(
 }
 
 // ── The login run ──────────────────────────────────────────────────
-async function doLogin(reason: string, headless: boolean): Promise<LoginResult> {
+async function doLogin(reason: string, headless: boolean, renew = false): Promise<LoginResult> {
   const profile = PROFILE_DIR();
   if (!existsSync(profile)) mkdirSync(profile, { recursive: true });
   // Clear a stale singleton lock from a crashed prior run so launch doesn't hang.
@@ -318,7 +407,8 @@ async function doLogin(reason: string, headless: boolean): Promise<LoginResult> 
   }
 
   const proxy = PROXY();
-  console.log(`[auto-login] starting ${headless ? "headless" : "headful"} (${reason})${proxy ? ` via proxy ${proxy}` : ""}`);
+  const tag = renew ? "[renewal]" : "[auto-login]";
+  console.log(`${tag} starting ${headless ? "headless" : "headful"} (${reason})${proxy ? ` via proxy ${proxy}` : ""}`);
   let browser: Browser | null = null;
   try {
     const args = [
@@ -360,6 +450,12 @@ async function doLogin(reason: string, headless: boolean): Promise<LoginResult> 
       console.warn(`[auto-login] page crashed: ${(e as Error).message}`);
     });
 
+    // A renewal starts from a live session, so the app would just show the
+    // dashboard. Dropping the browser's copy of the app cookie makes the app sign
+    // in again through Auth0, silently while Auth0's own sign-in is still valid.
+    // The server keeps using its copy until the new one is accepted.
+    if (renew) await page.deleteCookie({ name: "tb.auth0.sid", domain: ".rocketmoney.com" });
+
     // domcontentloaded, NOT networkidle2: the app fires a constant stream of
     // analytics/tracker requests (__ps_*, Segment, Datadog, Stripe, Intercom), so
     // over the proxied residential link the network never goes quiet and
@@ -367,16 +463,15 @@ async function doLogin(reason: string, headless: boolean): Promise<LoginResult> 
     //
     // And the goto is non-fatal: over the home SOCKS link the app->Auth0 redirect
     // chain intermittently exceeds the nav budget, but the page usually loaded
-    // fine anyway. Catching it lets firstVisible() below poll for the form rather
+    // fine anyway. Catching it lets the wait below poll for a session or the form rather
     // than the whole run dying on a slow (but successful) navigation.
     let navError = "";
     try {
       await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 90000 });
     } catch (e) {
       navError = (e as Error).message;
-      console.warn(`[auto-login] initial nav slow (${(e as Error).message}); polling for the form anyway`);
+      console.warn(`${tag} initial nav slow (${(e as Error).message}); polling for a session or the form anyway`);
     }
-    await sleep(3000);
 
     // A tb.auth0.sid in the jar is NOT proof of a session: the profile keeps the
     // last one it saw, long after it went stale. Accepting it seeded a dead cookie,
@@ -384,31 +479,42 @@ async function doLogin(reason: string, headless: boolean): Promise<LoginResult> 
     // checked against the API, and only a working cookie is seeded.
     const acceptSession = makeSessionAcceptor(probeSession, seedSession);
 
-    // Path 1: trusted profile silently renewed -> already have a session.
-    if (await acceptSession(await readSession(page))) {
-      console.log("[auto-login] warm renewal succeeded (no login form, no MFA)");
+    // Path 1: the profile renews silently (Auth0 sign-in still valid) -> a session
+    // turns up, sometimes seconds after the page loads. Path 2: the login form.
+    // Generous timeout: every hop can be proxied through the home SOCKS exit, so
+    // Auth0's JS can take far longer to render its inputs than on a direct link.
+    const first = await waitForSessionOrForm({
+      accept: async () => acceptSession(await readSession(page)),
+      findForm: () =>
+        visibleNow(page, ["input[name='username']", "input[type='email']", "input#username", "input[autocomplete='username']"]),
+      timeoutMs: 45000,
+      tickMs: 1500,
+    });
+    if (first.kind === "session") {
+      console.log(`${tag} ${renew ? "renewed silently" : "warm renewal succeeded"} (no login form, no MFA)`);
       return { ok: true };
     }
-
-    // Path 2: a login form is present -> fill identifier-first Auth0 flow.
-    // Generous: every hop here is proxied through the home SOCKS exit, so Auth0's
-    // JS can take far longer to render its inputs than on a direct link. A 12s
-    // wait raced the render and reported "no login form" while the page was still
-    // painting (the failure screenshot showed a fully-rendered form).
-    const emailEl = await firstVisible(
-      page,
-      ["input[name='username']", "input[type='email']", "input#username", "input[autocomplete='username']"],
-      45000,
-    );
-    if (!emailEl) {
-      await snapshot(page, "noform");
+    if (first.kind === "neither") {
+      await snapshot(page, renew ? "renew-noform" : "noform");
       // No network at all (laptop offline / asleep): retrying, least of all in a
       // headful window, can't help, so say so and let the next tick try again.
       if (/net::ERR_(INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|ADDRESS_UNREACHABLE)/.test(navError)) {
         return { ok: false, offline: true, error: `offline (${navError})` };
       }
-      return { ok: false, error: "no session and no login form (possible attack-protection block; see noform.png)" };
+      return {
+        ok: false,
+        error: `no session and no login form (possible attack-protection block; see login-${renew ? "renew-noform" : "noform"}.png)`,
+      };
     }
+    if (renew) {
+      await snapshot(page, "renew-form");
+      return {
+        ok: false,
+        needsForm: true,
+        error: "silent renewal got the login form: Auth0's sign-in has lapsed, so the next login needs the form",
+      };
+    }
+    const emailEl = first.form;
     await emailEl.click({ count: 3 });
     await emailEl.type(EMAIL(), { delay: 30 });
 

@@ -4,7 +4,7 @@ import { buildServer } from "./mcp.js";
 import { renderAuthPage, submitAuth, triggerLogin, postOtp, smsWebhook } from "./auth-page.js";
 import { refreshAuthToken } from "./rm/client.js";
 import { sessionStatus } from "./rm/session.js";
-import { attemptLogin, autoLoginConfigured } from "./rm/login.js";
+import { attemptLogin, autoLoginConfigured, renewDue, renewSession } from "./rm/login.js";
 import { newTransactions, budgetSnapshot, requireToken } from "./api.js";
 import { installTimestamps } from "./log.js";
 
@@ -94,6 +94,13 @@ app.delete("/mcp", methodNotAllowed);
 // 401 (+60m), every hour, while a session in active use lasted 4h15m
 // (2026-10-29). So ping well inside it. Harmless when there's no session.
 const KEEPALIVE_MS = Number(process.env.ROCKETMONEY_KEEPALIVE_MS ?? 10 * 60 * 1000); // 10m
+// The keepalive above doesn't stop the session dying, and once Auth0's own 1h
+// sign-in cookie has lapsed a re-login needs the form, which only a visible
+// window gets past. So a live session older than this is renewed silently,
+// headless, while Auth0's sign-in is still valid (see renewSession in login.ts).
+// Checked on each keepalive tick, so renewal lands 40-50 min after the last
+// login, inside the 1h. 0 turns it off.
+const RENEW_AFTER_MS = Number(process.env.ROCKETMONEY_RENEW_AFTER_MS ?? 40 * 60 * 1000); // 40m
 async function keepalive(): Promise<void> {
   // Dead/missing session: fall back to a headless re-login (rate-limited + backed
   // off inside attemptLogin, so this can safely run every keepalive tick). A cold
@@ -112,6 +119,12 @@ async function keepalive(): Promise<void> {
     console.warn("[keepalive] failed:", String(err));
     // A refresh that fails on auth means the session just died; let auto-login
     // (rate-limited) take over on the next tick rather than spinning here.
+    return;
+  }
+  if (autoLoginConfigured() && renewDue(sessionStatus(), Date.now(), RENEW_AFTER_MS)) {
+    const r = await renewSession("proactive renewal");
+    if (r.ok) console.log("[renewal] ok: fresh session, Auth0 sign-in extended");
+    else if (!r.error?.startsWith("renewal rate-limited")) console.warn("[renewal] failed:", r.error);
   }
 }
 setInterval(keepalive, KEEPALIVE_MS).unref();

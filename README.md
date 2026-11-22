@@ -134,7 +134,21 @@ Rocket Money has no third-party OAuth, so this server reuses your own web sessio
 response re-issues the cookie, and every API call is serialized so two requests can
 never race the rotation. A keepalive loop calls `RefreshAuthToken` every
 `ROCKETMONEY_KEEPALIVE_MS`. There is no offline refresh token, and in practice the
-session dies roughly every 30-60 minutes, so it has to be re-created regularly.
+session dies within an hour or two, so it has to be re-created regularly.
+
+**Two clocks.** The app cookie (`tb.auth0.sid`) is set to last 4 hours, but Auth0's own
+sign-in cookie (`auth0` on `auth.rocketaccount.com`) lasts only **1 hour from its last
+use**. While that one is valid, a new session comes silently (the app signs in through
+Auth0 with no form); once it lapses, the login form comes back, with a "Verify you are
+human" check that headless Chrome doesn't pass. So the server **renews proactively**:
+when the session is older than `ROCKETMONEY_RENEW_AFTER_MS` (40 min), a headless
+browser drops the profile's app cookie and reloads the app, which signs in again
+silently (about 8 s). That gives a fresh session and pushes the `auth0` cookie out
+another hour, so the form, and the visible window, shouldn't be needed. A renewal
+never fills in the form: if Auth0 asks for it, the renewal stops and the normal login
+below handles it when the session dies. The one case left is the Mac asleep (or
+offline) for over an hour: on waking, the sign-in has lapsed and the next login opens
+a window once.
 
 **Seeding it by hand.** Paste the cookie value from a logged-in `app.rocketmoney.com`
 tab into the `/auth` page (just the value is fine, or the whole Cookie header).
@@ -145,8 +159,9 @@ tab into the `/auth` page (just the value is fine, or the whole Cookie header).
 Chrome (`rebrowser-puppeteer-core` + the stealth plugin) with a **persistent
 Chrome profile** in the state dir, then seeds the new cookie into the jar:
 
-1. *Warm renewal:* if the profile still holds a working session, it is reused (a few
-   seconds, no form).
+1. *Warm renewal:* if Auth0's sign-in is still valid, the app signs in silently and the
+   new session is picked up (a few seconds, no form). The run keeps checking for it
+   while it waits for the form, since the silent sign-in can take 5-10 seconds.
 2. *Form login:* otherwise it fills in email and password. Because the profile is a
    device Auth0 already trusts, this usually skips MFA.
 3. *SMS MFA:* if Auth0 does challenge, the run waits up to ~4 minutes for the code,
@@ -167,8 +182,9 @@ Details that keep it reliable:
   button bypasses the cooldown.
 - **Offline:** if Chrome reports no network, the run stops without retrying or
   opening a window, and does not grow the backoff.
-- Each run's outcome is written to `$ROCKETMONEY_STATE_DIR/login-last.json` (logs have
-  no timestamps), and failures save a screenshot (`login-<tag>.png`) beside it.
+- Each run's outcome (logins and renewals) is written to
+  `$ROCKETMONEY_STATE_DIR/login-last.json`, and failures save a screenshot
+  (`login-<tag>.png`) beside it. Log lines are timestamped; renewals log as `[renewal]`.
 
 The cookie, the Chrome profile and the credentials stay on the machine running this
 server; the cookie is sent only to Rocket Money's own API.
@@ -207,6 +223,7 @@ ROCKETMONEY_STATE_DIR=./.state PORT=8080 node dist/index.js
 | `ROCKETMONEY_STATE_DIR` | `/data/rocketmoney` | Where the rotating session is persisted |
 | `ROCKETMONEY_READ_ONLY` | unset | `1` to leave the write tools unregistered |
 | `ROCKETMONEY_KEEPALIVE_MS` | `600000` | Keepalive interval (10 min; the launchd plist sets the same) |
+| `ROCKETMONEY_RENEW_AFTER_MS` | `2400000` | Renew a live session silently once it is this old (40 min; must stay under Auth0's 1 h sign-in cookie). `0` turns renewal off |
 | `ROCKETMONEY_LOG_TIMESTAMPS` | on | `0` to leave log lines unstamped (each line starts with a UTC ISO time otherwise) |
 | `ROCKETMONEY_AUTO_LOGIN` | unset | `1` to re-login automatically when the session dies |
 | `ROCKETMONEY_EMAIL` / `ROCKETMONEY_PASSWORD` | unset | Login credentials for auto-login (`start.sh` reads them from the Keychain) |
@@ -260,9 +277,10 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
 
 ## Known shortcomings
 
-- **Short sessions.** Rocket Money's session lasts roughly 30-60 minutes in practice,
-  so auto-login runs many times a day. It depends on a stored password and on Auth0
-  not tightening bot detection; if that changes, logins fail until it is fixed.
+- **Short sessions.** Rocket Money's session lasts an hour or two in practice, so the
+  server renews it silently every 40 minutes (and auto-login covers the rest). It
+  depends on a stored password and on Auth0 not tightening bot detection; if that
+  changes, logins fail until it is fixed.
 - **Partial outages can still open a window.** Only "no network" errors count as
   offline. A timeout or connection reset gets the headless retry and then the visible
   fallback.
