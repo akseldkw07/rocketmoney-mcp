@@ -164,6 +164,7 @@ test("delete removes manual rows and refuses bank rows, missing rows and non-tra
   assert.deepEqual(out[0], { id: T1, deleted: true });
   assert.match(out[1].error!, /not a manual transaction/);
   assert.match(out[2].error!, /no such transaction/);
+  assert.match(out[2].error!, /Rocket Money returned null for it/);
   assert.match(out[3].error!, /not a transaction id/);
   const del = sent.find((s) => s.operationName === "DeleteManualTransactions")!;
   assert.deepEqual(Object.values(del.variables), [{ transactionNodeId: T1 }]);

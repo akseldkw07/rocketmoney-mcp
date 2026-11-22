@@ -4,7 +4,8 @@ A self-hosted [Model Context Protocol](https://modelcontextprotocol.io) server f
 [Rocket Money](https://www.rocketmoney.com). It lets an MCP client (Claude Desktop,
 claude.ai, etc.) browse your accounts, transactions, spending, budgets, net worth,
 and subscriptions so you can *talk to an assistant about your finances* - and make
-targeted edits (transaction notes and categories, recurring-charge corrections).
+targeted edits (transaction notes and categories, hand-added transactions,
+recurring-charge corrections).
 
 Reads are annotated `readOnlyHint`; the mutating tools are marked `readOnlyHint: false`,
 and `delete_subscription` and `delete_transaction` additionally carry `destructiveHint`. Start the server with

@@ -83,6 +83,7 @@ test("a non-transaction id is refused with a clear reason and never sent to Rock
   ]);
   assert.match(out[0].error ?? "", /not a transaction id/);
   assert.match(out[1].error ?? "", /no such transaction, or not one of yours/);
+  assert.match(out[1].error ?? "", /Rocket Money said "An error occurred\."/);
   assert.equal(sent.length, 1);
   assert.deepEqual(Object.values(sent[0].variables as object), [{ transactionNodeId: real, note: "y" }]);
   assert.deepEqual(partitionTransactionIds(["bogus", real]).valid, [real]);

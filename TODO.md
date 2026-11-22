@@ -273,26 +273,23 @@ then A2-A4 (need the rotation investigation and more care), then E.
       accounts, since whether `accounts(enabled: false)` or `node(id:)` returns them is
       unconfirmed without a live call.
 
-- [x] **F12. Manual transactions: `create_transaction` / `delete_transaction`.** The
-      web app has no Add Transaction screen (the phone app does), but the web API takes
-      it: the bundle's schema lists `addManualTransaction` and `deleteManualTransaction`,
-      and both work with the web session. Inputs (from validation errors; introspection
-      is off): `{ name, amountCents, direction: spend | income, date, categoryId?,
-      accountId? }` and `{ transactionNodeId }`. *Added 2026-11-22 (`src/rm/manual.ts`).*
-      Tested live with $0.01 `TEST` rows, all deleted: dated 2021 and 2022, counted in
-      spending (Medical moved by $0.01), note/category/date/ignore all work on them,
-      income is stored negative, and rows carry `manual: true` (bank rows `false`), which
-      the delete guard checks. Open:
-      The tool also takes `account_id` (a bank-linked account works too; a bad id
-      fails with `NOT_FOUND`), `ignore` and `tax_deductible` (`setTransactionTaxDeductible
-      { transactionNodeId, taxDeductible }`), all tested live. What it can't set, and why,
-      is in the `src/rm/manual.ts` header and the tool description.
-  - [ ] With no `account_id`, RM files rows under a manual "Cash" account it creates. It
-        isn't in `list_accounts`, so rows show `(switched off) <id>` (F11), though
-        `node(id:)` does return its name.
-  - [ ] Before entering a backlog of an unlinked card's purchases, check whether the
-        card's payments from a linked checking account are already categorized as the
-        spending itself: entering the purchases too would double count.
+- [x] **F12. Manual transactions: `create_transaction` / `delete_transaction`.**
+      *Done 2026-11-22 (PR #25):* `src/rm/manual.ts`. The web app has no Add Transaction
+      screen (the phone app does), but the web API takes it: the bundle's schema lists
+      `addManualTransaction` and `deleteManualTransaction`, and both work with the web
+      session. Inputs (from validation errors; introspection is off): `{ name,
+      amountCents, direction: spend | income, date, categoryId?, accountId? }` and
+      `{ transactionNodeId }`; tax deductible goes through `setTransactionTaxDeductible
+      { transactionNodeId, taxDeductible }`. Tested live with $0.01 `TEST` rows, all
+      deleted: dated 2021 and 2022, counted in spending, income stored negative,
+      `account_id` takes the manual Cash account or a bank-linked one (a bad id fails
+      with `NOT_FOUND`), and note/category/date/ignore/tax deductible all work on the
+      rows. Rows carry `manual: true` (bank rows `false`), which the delete guard checks.
+      What it can't set, and why, is in the `src/rm/manual.ts` header and the tool
+      description. Also in this PR: tool errors come back whole (`describeError` in
+      `src/tools/common.ts`: RM's GraphQL errors with path and extensions, the cause
+      chain, and the stack for non-RM errors), and the per-item "An error occurred."
+      rewording now quotes RM's text. Split out: F13 (splits), F14 (Cash account label).
 
 - [ ] **F13. Split transactions (separate PR).** `create_transaction` can't split a
       row, and no tool splits a synced one either. The web bundle has
@@ -303,6 +300,12 @@ then A2-A4 (need the rotation investigation and more care), then E.
       then add `split_transaction` / `unsplit_transaction` and a `splits` option on
       `create_transaction`. Check how split children show in `search_transactions` and
       spending (the parent should stop counting) before shipping.
+
+- [ ] **F14. Label the manual "Cash" account.** `create_transaction` without
+      `account_id` files rows under a manual "Cash" account Rocket Money creates. It
+      isn't in `list_accounts`, so its rows read `(switched off) <id>` (F11). `node(id:)`
+      does return its name and `source: manual`, so `accountLabels()` could look up any
+      account id it doesn't know that way.
 
 ## Second sweep (2026-10-29, after PR #7)
 

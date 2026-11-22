@@ -235,7 +235,7 @@ export async function deleteManualTransactions(ids) {
         if (!f.ok && f.error !== "no result returned")
             out[x.i].error = `could not read it, so not deleted: ${f.error}`;
         else if (!f.data)
-            out[x.i].error = "no such transaction, or not one of yours";
+            out[x.i].error = "Rocket Money returned null for it, with no error: no such transaction, or not one of yours";
         else if (f.data.manual !== true)
             out[x.i].error = "not a manual transaction (bank-synced rows can't be deleted)";
         else
