@@ -1,15 +1,16 @@
 # TODO
 
-Outstanding work as of 2026-10-29. Owners in brackets where another agent has it.
+Outstanding work, last swept 2026-11-22. Owners in brackets where another agent has it.
 
 ## Finish the current PR
 
 - [x] Merge PR #5 (`fix/hash-rotation-and-rules`).
 - [x] Merge PR #7 (`fix/reported-bugs-and-sweep`): R1-R5 and the sweep.
-- [ ] Merge PR #8 (`chore/lingering-and-cleanup`): 10-minute keepalive, rule/hand-edit
+- [x] Merge PR #8 (`chore/lingering-and-cleanup`): 10-minute keepalive, rule/hand-edit
       findings, second sweep (F1-F6).
-- [ ] After a deploy that changes tool parameters, start a new conversation with any agent
-      that uses these tools (an existing chat keeps the definitions it already loaded).
+- [x] ~~After a deploy that changes tool parameters, start a new conversation.~~ A
+      standing rule rather than a task: now a README note (Notes, "Tool changes don't
+      reach existing chats").
 
 ## Verify in real use
 
@@ -18,7 +19,9 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
       re-login to `session-watch.log` in the 2026-10-29 session's scratchpad. *Pass:* only
       the two "watch start" lines; with the old 30-minute keepalive there was a re-login
       every hour. *Fail:* new lines; their timestamps give the real session lifetime. Then
-      stop the monitor: `pkill -f session-watch.log`.
+      stop the monitor: `pkill -f session-watch.log`. Since 2026-11-22 (F10) the server
+      log is timestamped, so this can also be read straight from it:
+      `grep -E "keepalive|re-login|session died" ~/Library/Logs/rocketmoney-mcp/server.log | tail`.
 - [ ] **Login re-probe fix.** A finished form login went unaccepted for 5 minutes, twice on
       2026-10-29, because a session cookie that failed one probe was never re-probed. It
       now re-probes every 10s. Full form logins only happen when Rocket Money's own login
@@ -26,8 +29,9 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
       `grep -A3 "credentials submitted" ~/Library/Logs/rocketmoney-mcp/server.log | tail -4`.
       *Pass:* `success` within seconds, possibly after `sid … not authenticated yet;
       re-checking every 10s`. *Fail:* a new `timed out without a session cookie` in
-      `server.err`. (One form login succeeded on 2026-10-29, probably after the fix; the log
-      has no timestamps to prove it. Forcing one means clearing the login profile's cookies
+      `server.err`; the line timestamps (F10, 2026-11-22) give the gap between "credentials
+      submitted" and `success`. (One form login succeeded on 2026-10-29, probably after
+      the fix; the log had no timestamps then to prove it. Forcing one means clearing the login profile's cookies
       and may trigger an SMS code, so do it only with your phone at hand.)
 - [x] **Do rule saves overwrite manual edits?** *Yes, for the fields the rule sets
       (tested 2026-10-29).* A rule that only renames left a hand-set category alone; once
@@ -58,26 +62,35 @@ Outstanding work as of 2026-10-29. Owners in brackets where another agent has it
 
 From README's TODO section:
 
-- [ ] Apply upstream Dependabot bumps (notably MCP SDK 1.32.0); consider enabling
-      Dependabot on the fork.
-- [ ] Remove `extension/`, or bring back `/auth/ingest` behind authentication.
-- [ ] Timestamp the server log.
-- [ ] Add CI for `npm test` and `npm run typecheck`.
+- [x] Apply upstream Dependabot bumps (notably MCP SDK 1.32.0). *Done:* the SDK is at
+      1.32.2 (bumps applied with the upstream merge, PR #18); 2026-11-22 also took the
+      in-range patch updates and fixed the two moderate `hono` advisories (a transitive
+      SDK dependency), so `npm audit` is clean. Still open: enabling Dependabot on the
+      fork.
+- [ ] Remove `extension/`, or bring back `/auth/ingest` behind authentication. *Needs a
+      decision.*
+- [x] Timestamp the server log. *Done 2026-11-22 (F10).*
+- [ ] Add CI for `npm test` and `npm run typecheck`. *Blocked:* `mcp-utils` is a private
+      repo and this one is public, so a GitHub Actions run can't `npm ci` without a
+      read-only token in a repo secret (or `mcp-utils` made public). Decide which, then
+      add `.github/workflows/ci.yml` (Node 20+, `npm ci`, `npm run typecheck`,
+      `npm test`).
 - [ ] Treat local-network timeouts/resets as offline without hiding real Rocket Money
       failures.
 - [ ] Capture the HAR for `npm run refresh-hashes` automatically.
-- [ ] README note: **tool changes don't reach existing chats.** A conversation that already
+- [x] README note: **tool changes don't reach existing chats.** *Done 2026-11-22.* A conversation that already
       loaded a tool keeps the definition it loaded, even after Claude Desktop restarts or
       the server redeploys; only tools it hadn't loaded yet come through new. After a
       deploy that changes a tool's parameters, start a new conversation (Claude Code:
       `/mcp` → reconnect, then a new session). Confirmed 2026-10-29: the server served the
       new `search_transactions` while an existing chat still saw the old one.
-- [ ] README: `PERSISTED` (the persisted-query hashes) moved from `src/rm/client.ts` to
+- [x] README: `PERSISTED` (the persisted-query hashes) moved from `src/rm/client.ts` to
       `src/rm/graphql.ts` on 2026-10-29, and the refresh script now rewrites it there.
-      Update the README's mentions of `client.ts` for hashes.
-- [ ] README's `feat/generic-transaction-writes` item is done: the hash fix is merged and
+      Update the README's mentions of `client.ts` for hashes. *Done 2026-11-22.*
+- [x] README's `feat/generic-transaction-writes` item is done: the hash fix is merged and
       the branch was deleted 2026-10-29 (upstream keeps the gate-note commit). Remove it
-      from README.
+      from README. *Done 2026-11-22:* README's TODO list now just points here (it had
+      drifted into a duplicate of this backlog).
 
 ## Venmo MCP [Venmo agent]
 
@@ -256,9 +269,13 @@ then A2-A4 (need the rotation investigation and more care), then E.
       Option: send query text first for reads, as search and rules already do, and drop
       `PERSISTED` and the HAR workflow. Trade-off: requests no longer look like the web
       app's.
-- [ ] **F10. Timestamped logs would close two checks** (keepalive and login re-probe)
+- [x] **F10. Timestamped logs would close two checks** (keepalive and login re-probe)
       from the log alone. That's the backlog item "Timestamp the server log" [other agent];
-      worth doing first.
+      worth doing first. *Done 2026-11-22 (chore/cleanup-logs-ci):* `src/log.ts`
+      prefixes every `console.log/info/warn/error` line with a UTC ISO time, installed at
+      startup in `src/index.ts`; `ROCKETMONEY_LOG_TIMESTAMPS=0` turns it off. The two
+      checks above say what to grep for; they still need a quiet idle stretch and a real
+      form login to happen.
 - [x] **F11. Switched-off accounts show as raw ids** (found 2026-11-02). When an account
       is switched off in Linked Accounts (history kept), `list_accounts` drops it and
       `accountLabels()` (`src/rm/rows.ts`) only sees enabled accounts. Its transactions
