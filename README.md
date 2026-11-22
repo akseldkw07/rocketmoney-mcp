@@ -180,8 +180,14 @@ Details that keep it reliable:
 - **Rate limit:** at most one run at a time, with exponential backoff (15 min, 30 min,
   ... capped at 6 h) to stay clear of Auth0 attack protection. The `/auth` "Log in now"
   button bypasses the cooldown.
-- **Offline:** if Chrome reports no network, the run stops without retrying or
-  opening a window, and does not grow the backoff.
+- **Offline and network blips:** before each browser run (login or renewal) the
+  server sends one request to `app.rocketmoney.com`. No answer at all (no network, a
+  timeout, a reset connection) stops the login there: no browser, no retry, no
+  window, no backoff and no cooldown, so it logs in as soon as the network is back.
+  Any HTTP answer, even an error page, counts as reachable, so a real refusal from
+  Rocket Money still goes through the normal handling with its own error. A Chrome
+  network error mid-run (`net::ERR_CONNECTION_RESET`, a navigation timeout, ...) is
+  treated the same way.
 - Each run's outcome (logins and renewals) is written to
   `$ROCKETMONEY_STATE_DIR/login-last.json`, and failures save a screenshot
   (`login-<tag>.png`) beside it. Log lines are timestamped; renewals log as `[renewal]`.
@@ -281,9 +287,6 @@ Locally it runs as the launchd agent in `com.akseldkw.rocketmoney-mcp.plist`
   server renews it silently every 40 minutes (and auto-login covers the rest). It
   depends on a stored password and on Auth0 not tightening bot detection; if that
   changes, logins fail until it is fixed.
-- **Partial outages can still open a window.** Only "no network" errors count as
-  offline. A timeout or connection reset gets the headless retry and then the visible
-  fallback.
 - **Chrome extension is orphaned.** `extension/` still pushes to `/auth/ingest`, which
   this build no longer registers. Paste at `/auth` or rely on auto-login instead.
 - **Query hashes rotate.** Reads fall back to bundled query text, which keeps working

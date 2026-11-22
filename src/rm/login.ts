@@ -5,6 +5,7 @@ import Stealth from "puppeteer-extra-plugin-stealth";
 import vanilla, { type Browser, type Page } from "rebrowser-puppeteer-core";
 import { seedSession, sessionStatus, type SessionStatus } from "./session.js";
 import { probeSession } from "./graphql.js"; // circular; runtime-only use
+import { isNetworkError, rocketMoneyReachable, type Reach } from "./network.js";
 
 // Auth0/Cloudflare bot-detection flags plain headless Chromium (the CDP
 // Runtime.enable leak + navigator.webdriver + headless signals). rebrowser-
@@ -202,23 +203,30 @@ export function attemptLogin(reason: string, force = false): Promise<LoginResult
   }
   inFlight = runLogin(reason)
     .then((r) => {
-      // An offline run never reached Auth0, so it doesn't grow the backoff:
-      // otherwise hours offline would delay the login after the network returns.
+      // An offline run never reached Auth0, so it neither grows the backoff nor
+      // starts the cooldown: otherwise time offline would delay the login after
+      // the network returns. While offline a run costs one HEAD request, not a browser.
       failures = r.ok ? 0 : r.offline ? failures : failures + 1;
+      if (startsCooldown(r)) lastAttempt = Date.now();
       recordResult(reason, r);
       return r;
     })
     .catch((e): LoginResult => {
       failures += 1;
-      const r: LoginResult = { ok: false, error: String(e?.message ?? e) };
+      lastAttempt = Date.now();
+      const r: LoginResult = { ok: false, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
       recordResult(reason, r);
       return r;
     })
     .finally(() => {
-      lastAttempt = Date.now();
       inFlight = null;
     });
   return inFlight;
+}
+
+/** Whether a finished run starts the login cooldown: every run but an offline one. */
+export function startsCooldown(r: LoginResult): boolean {
+  return !r.offline;
 }
 
 // ── Proactive silent renewal ───────────────────────────────────────
@@ -255,10 +263,16 @@ export function renewSession(reason: string): Promise<LoginResult> {
   const wait = RENEW_RETRY_MS - (Date.now() - lastRenewAttempt);
   if (wait > 0) return Promise.resolve({ ok: false, error: `renewal rate-limited; next try in ${Math.ceil(wait / 60000)}m` });
   lastRenewAttempt = Date.now();
-  inFlight = doLogin(reason, HEADLESS() !== "0", true)
+  inFlight = (async (): Promise<LoginResult> => {
+    const reach = await rocketMoneyReachable();
+    if (!reach.ok) return { ok: false, offline: true, error: `can't reach Rocket Money (${reach.error}); renewal skipped` };
+    return doLogin(reason, HEADLESS() !== "0", true);
+  })()
     .catch((e): LoginResult => ({ ok: false, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }))
     .then((r) => {
       if (r.ok) failures = 0;
+      // Offline doesn't use up the retry window: renew as soon as the network is back.
+      if (r.offline) lastRenewAttempt = 0;
       recordResult(reason, r);
       return r;
     })
@@ -274,17 +288,41 @@ export function renewSession(reason: string): Promise<LoginResult> {
  * form login, leaving the profile signed in, so the retry is a quick warm renewal.
  * Only then does "auto" fall back to a headful window. No retry once a run has
  * reached MFA: a second run would text a second SMS code.
+ *
+ * Before every run, one request checks that Rocket Money answers at all. If it
+ * doesn't (no network, a stalled or reset connection), the login stops there as
+ * offline: a browser can't fix that, and a failed headless run caused by the
+ * network used to fall through to the visible window.
  */
+export async function runLoginSteps(
+  reason: string,
+  d: {
+    mode: string;
+    doLogin: (reason: string, headless: boolean) => Promise<LoginResult>;
+    reachable: () => Promise<Reach>;
+  },
+): Promise<LoginResult> {
+  const offline = async (): Promise<LoginResult | null> => {
+    const reach = await d.reachable();
+    return reach.ok ? null : { ok: false, offline: true, error: `can't reach Rocket Money (${reach.error}); not opening a browser` };
+  };
+  const steps = d.mode === "auto" ? [true, true, false] : d.mode === "1" ? [true, true] : [false];
+  let r: LoginResult = { ok: false, error: "no login run" };
+  for (const [i, headless] of steps.entries()) {
+    const off = await offline();
+    if (off) {
+      if (i > 0) console.warn(`[auto-login] ${off.error}`);
+      return off;
+    }
+    if (i > 0) console.warn(`[auto-login] ${i === 1 ? "headless run" : "headless retry"} failed (${r.error}); retrying ${headless ? "headless" : "headful"}`);
+    r = await d.doLogin(reason, headless);
+    if (r.ok || r.reachedMfa || r.offline) return r;
+  }
+  return r;
+}
+
 async function runLogin(reason: string): Promise<LoginResult> {
-  const mode = HEADLESS();
-  if (mode !== "auto" && mode !== "1") return doLogin(reason, false);
-  let r = await doLogin(reason, true);
-  if (r.ok || r.reachedMfa || r.offline) return r;
-  console.warn(`[auto-login] headless run failed (${r.error}); retrying headless`);
-  r = await doLogin(reason, true);
-  if (r.ok || r.reachedMfa || r.offline || mode === "1") return r;
-  console.warn(`[auto-login] headless retry failed (${r.error}); retrying headful`);
-  return doLogin(reason, false);
+  return runLoginSteps(reason, { mode: HEADLESS(), doLogin: (why, headless) => doLogin(why, headless), reachable: () => rocketMoneyReachable() });
 }
 
 // ── DOM helpers ────────────────────────────────────────────────────
@@ -498,7 +536,7 @@ async function doLogin(reason: string, headless: boolean, renew = false): Promis
       await snapshot(page, renew ? "renew-noform" : "noform");
       // No network at all (laptop offline / asleep): retrying, least of all in a
       // headful window, can't help, so say so and let the next tick try again.
-      if (/net::ERR_(INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|ADDRESS_UNREACHABLE)/.test(navError)) {
+      if (navError && isNetworkError(new Error(navError))) {
         return { ok: false, offline: true, error: `offline (${navError})` };
       }
       return {
