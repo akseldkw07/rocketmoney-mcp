@@ -284,7 +284,7 @@ then A2-A4 (need the rotation investigation and more care), then E.
       rotation costs a failed request per operation until `npm run refresh-hashes` runs.
       Option: send query text first for reads, as search and rules already do, and drop
       `PERSISTED` and the HAR workflow. Trade-off: requests no longer look like the web
-      app's. *Done 2026-11-22 (feat/query-text-reads):* took that option. `rmGraphQL`
+      app's. *Done 2026-11-22 (PR #31):* took that option. `rmGraphQL`
       and the session probe send the bundled text; `PERSISTED`, `CAPTURE_PAGE` and
       `PersistedQueryNotFoundError` are gone, and `npm run refresh-hashes` became
       `npm run refresh-query-text` (bundle only, no HAR mode). A read RM rejects as
