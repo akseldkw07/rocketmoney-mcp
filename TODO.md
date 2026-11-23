@@ -379,7 +379,8 @@ then A2-A4 (need the rotation investigation and more care), then E.
       (`no session and no login form`) and `ENOTFOUND app.rocketmoney.com` through the
       night; at 08:24Z one reached the SMS screen and timed out with nobody to enter the
       code. Fixed in F16.
-- [ ] **F16. Survive network outages longer than the renewal margin.** Two parts:
+- [x] **F16. Survive network outages longer than the renewal margin.** *Done 2026-11-23
+      (PR #33).* Two parts:
       (1) renew at 20 min by default (`DEFAULT_RENEW_AFTER_MS`; was 40, which with
       10-min ticks meant every 50 min and only ~10 min of slack), and while Rocket
       Money is unreachable tick every 2 min (`nextKeepaliveDelay`), so the renewal runs
