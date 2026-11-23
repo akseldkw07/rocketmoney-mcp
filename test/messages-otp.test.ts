@@ -26,9 +26,9 @@ test("converts between Apple's nanoseconds-since-2001 and epoch ms", () => {
 });
 
 test("reads the code from attributedBody when the text column is empty", () => {
-  const body = new TextEncoder().encode("\u0004\u000bstreamtyped NSString Code: 777888 \u0086");
+  const body = new TextEncoder().encode("\u0004\u000bstreamtyped NSString Rocket Account: Code: 777888 \u0086");
   assert.equal(rowCode({ text: null, attributedBody: body }), "777888");
-  assert.equal(rowCode({ text: "Code: 111222", attributedBody: body }), "111222");
+  assert.equal(rowCode({ text: "Rocket Account: Code: 111222", attributedBody: body }), "111222");
   assert.equal(rowCode({ text: null, attributedBody: null }), null);
 });
 
@@ -45,7 +45,7 @@ function fakeChatDb(): string {
   ins.run(1, 0, t("2026-11-23T10:40:00Z"), "Code: 000001"); // before the login started
   ins.run(2, 0, t("2026-11-23T10:47:31Z"), "Code: 999999"); // another sender
   ins.run(1, 1, t("2026-11-23T10:47:31Z"), "Code: 888888"); // sent by me
-  ins.run(1, 0, t("2026-11-23T10:47:30Z"), "Code: 594411"); // the one we want
+  ins.run(1, 0, t("2026-11-23T10:47:30Z"), "Rocket Account: Code: 594411"); // the one we want
   db.close();
   return path;
 }
@@ -115,4 +115,10 @@ test("a read error ends the watch with the error itself, not a summary", async (
   });
   assert.ok("error" in r);
   assert.equal(r.error, boom);
+});
+
+test("22395 is shared: a code from another company on the same short code is ignored", () => {
+  const inspira = "This message is from Inspira Financial. Your verification code is 129625. This code will expire after 2 minutes.";
+  assert.equal(rowCode({ text: inspira, attributedBody: null }), null);
+  assert.equal(rowCode({ text: "Rocket Account: DO NOT share this one-time passcode. Code: 594411", attributedBody: null }), "594411");
 });
