@@ -79,6 +79,14 @@ let pendingOtp: OtpWaiter | null = null;
 let bufferedCode: { code: string; at: number } | null = null;
 const OTP_BUFFER_TTL = 120_000;
 
+// Called once when a login run parks on the SMS challenge, with the time the
+// password was submitted (the code can only have been sent after it). index.ts
+// sets it to the Messages watcher, which feeds the code to submitOtp.
+let smsChallengeHook: ((submittedAt: number) => void) | null = null;
+export function onSmsChallenge(fn: ((submittedAt: number) => void) | null): void {
+  smsChallengeHook = fn;
+}
+
 /** True while a login run is blocked waiting for the user to submit an SMS code. */
 export function otpPending(): boolean {
   return pendingOtp !== null;
@@ -245,6 +253,21 @@ export function startsCooldown(r: LoginResult): boolean {
 export function renewDue(s: Pick<SessionStatus, "status" | "seededAt">, now: number, renewAfterMs: number): boolean {
   if (renewAfterMs <= 0 || s.status !== "live" || !s.seededAt) return false;
   return now - Date.parse(s.seededAt) >= renewAfterMs;
+}
+
+// Renewing at 20 min leaves 40 min of `auth0`'s hour for the network to be down
+// before a full SMS login is needed. 40 min (the first default) renewed every
+// 50 min in practice (10-min ticks), and a 1h outage on 2026-11-22 outlasted
+// the 10 min that left.
+export const DEFAULT_RENEW_AFTER_MS = 20 * 60 * 1000;
+
+/**
+ * Delay to the next keepalive tick. While Rocket Money is unreachable, check
+ * every 2 minutes (never slower than the normal interval), so the renewal or
+ * login runs as soon as the network is back instead of up to 10 minutes later.
+ */
+export function nextKeepaliveDelay(offline: boolean, baseMs: number): number {
+  return offline ? Math.min(baseMs, 2 * 60 * 1000) : baseMs;
 }
 
 const RENEW_RETRY_MS = 15 * 60 * 1000;
@@ -574,6 +597,7 @@ async function doLogin(reason: string, headless: boolean, renew = false): Promis
     if (!submit) return { ok: false, error: "no submit button after password" };
     await submit.click();
     console.log("[auto-login] credentials submitted");
+    const submittedAt = Date.now();
 
     // Path 3: watch for either success, or an SMS challenge we must satisfy.
     //
@@ -612,6 +636,7 @@ async function doLogin(reason: string, headless: boolean, renew = false): Promis
           void waitForOtp(4 * 60 * 1000).then((c) => {
             inboundCode = c;
           });
+          smsChallengeHook?.(submittedAt);
         }
 
         // A code arrived (via /auth/otp or the SMS webhook) -> type it once.
