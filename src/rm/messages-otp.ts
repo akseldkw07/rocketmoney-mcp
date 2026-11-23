@@ -7,7 +7,8 @@
 // itself and finish the login with nobody at the keyboard.
 //
 // Scope, kept deliberately narrow: read-only open; only messages received (not
-// sent) from ROCKETMONEY_OTP_SENDER (default 22395, Rocket Account's short code);
+// sent) from ROCKETMONEY_OTP_SENDER (default 22395, a short code Rocket Account
+// shares with other companies, so the text must also name Rocket);
 // only ones that arrived after the login submitted the password; only a 6-digit
 // code is returned, and message text is never logged. Needs Full Disk Access for
 // the `node` binary running the server; without it the open fails and the error
@@ -33,9 +34,11 @@ export const appleNsFromMs = (ms: number): bigint => BigInt(ms - APPLE_EPOCH_MS)
  * appears as plain UTF-8.
  */
 export function rowCode(row: { text: string | null; attributedBody: Uint8Array | null }): string | null {
-  if (row.text) return extractRmCode(row.text);
-  if (row.attributedBody) return extractRmCode(new TextDecoder("utf-8", { fatal: false }).decode(row.attributedBody));
-  return null;
+  const text = row.text || (row.attributedBody ? new TextDecoder("utf-8", { fatal: false }).decode(row.attributedBody) : "");
+  // 22395 is a shared short code (Inspira Financial's codes come from it too),
+  // so only a message that names Rocket counts.
+  if (!/\brocket\b/i.test(text)) return null;
+  return extractRmCode(text);
 }
 
 export const DEFAULT_CHAT_DB = `${process.env.HOME}/Library/Messages/chat.db`;

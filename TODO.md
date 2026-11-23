@@ -393,7 +393,11 @@ then A2-A4 (need the rotation investigation and more care), then E.
       server's `node`; the startup line `[otp-messages] on` / `can't read` says which.
       `ROCKETMONEY_OTP_FROM_MESSAGES=0` turns it off. *To verify:* after deploy, the
       startup log shows `[otp-messages] on`; the next SMS login logs `code found in
-      Messages` then `success (MFA satisfied)`.
+      Messages` then `success (MFA satisfied)`. *Follow-up 2026-11-23:* 22395 is
+      shared (an Inspira Financial code came from it), so a message must also name
+      Rocket. First live run: the iPhone hadn't forwarded the text to the Mac 4 min
+      later (flaky network), so the code went in through /auth; forwarding needs
+      the phone online too.
 
 ## Second sweep (2026-10-29, after PR #7)
 
