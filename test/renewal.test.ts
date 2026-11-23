@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renewDue, waitForSessionOrForm } from "../src/rm/login.js";
+import { renewDue, waitForSessionOrForm, nextKeepaliveDelay, DEFAULT_RENEW_AFTER_MS } from "../src/rm/login.js";
 
 const MIN = 60_000;
 const seeded = "2026-11-22T11:28:39.000Z";
@@ -78,4 +78,15 @@ test("a check that throws mid-navigation skips the tick instead of failing the w
     ...clock,
   });
   assert.deepEqual(r, { kind: "session" });
+});
+
+test("the keepalive checks every 2 minutes while offline, so renewal runs as soon as the network is back", () => {
+  assert.equal(nextKeepaliveDelay(false, 10 * MIN), 10 * MIN);
+  assert.equal(nextKeepaliveDelay(true, 10 * MIN), 2 * MIN);
+  // never slower than the normal interval when that is already short
+  assert.equal(nextKeepaliveDelay(true, 1 * MIN), 1 * MIN);
+});
+
+test("default renewal age leaves 40 minutes of the 1h sign-in for outages", () => {
+  assert.equal(DEFAULT_RENEW_AFTER_MS, 20 * MIN);
 });

@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { seedSession, sessionStatus } from "./rm/session.js";
 import { attemptLogin, submitOtp, otpPending, loginState, sleep } from "./rm/login.js";
+import { extractRmCode } from "./rm/messages-otp.js";
 
 
 // The paste-a-cookie page. Meant to sit behind an authenticating front door
@@ -155,11 +156,7 @@ export function smsWebhook(req: Request, res: Response): void {
     typeof req.body === "string"
       ? req.body
       : String(b.text ?? b.message ?? b.body ?? b.msg ?? b.content ?? "");
-  // RM's code is 6 digits. Prefer digits that sit next to a code-ish word; else
-  // take the first standalone 6-digit run.
-  const near = text.match(/(?:code|verification|passcode)\D{0,20}(\d{6})/i);
-  const any = text.match(/\b(\d{6})\b/);
-  const code = near?.[1] ?? any?.[1];
+  const code = extractRmCode(text);
   if (!code) {
     // 200 (not an error): the app's TEST payload and any non-code text land here.
     // Returning 2xx keeps the forwarder from retrying a message it can't use.

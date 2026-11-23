@@ -370,8 +370,29 @@ then A2-A4 (need the rotation investigation and more care), then E.
       and no login form" (78 times) and pushed runs toward the window; the run now
       checks for a session on every tick while it waits (`waitForSessionOrForm`).
       Still opens a window once: after the Mac has slept or been offline for over an
-      hour. *To verify:* `grep -E "\[renewal\]|starting headful" ~/Library/Logs/rocketmoney-mcp/server.log`
-      over a day of normal use: renewals every 40-50 min and no `starting headful`.
+      hour. *24h check 2026-11-23 (after the deploy at 12:36Z): FAIL.* Renewals worked:
+      3 `[renewal] ok` (14:16, 15:06, 15:56Z, every 50 min), 0 failed. But the network
+      dropped from ~16:10Z (`[keepalive] failed: TypeError: fetch failed` at 16:16,
+      16:33, 16:55), so the renewal due at ~16:46 couldn't run and `auth0` lapsed ~16:57.
+      Every login after that needed the form and an SMS code: 3 `starting headful`
+      (18:18, 23:09, 04:02Z), none after a sleep gap, plus pages stuck on a spinner
+      (`no session and no login form`) and `ENOTFOUND app.rocketmoney.com` through the
+      night; at 08:24Z one reached the SMS screen and timed out with nobody to enter the
+      code. Fixed in F16.
+- [ ] **F16. Survive network outages longer than the renewal margin.** Two parts:
+      (1) renew at 20 min by default (`DEFAULT_RENEW_AFTER_MS`; was 40, which with
+      10-min ticks meant every 50 min and only ~10 min of slack), and while Rocket
+      Money is unreachable tick every 2 min (`nextKeepaliveDelay`), so the renewal runs
+      as soon as the network is back: outages up to ~40 min need no login at all.
+      (2) when a full login does park on the SMS challenge, `src/rm/messages-otp.ts`
+      reads the code from `~/Library/Messages/chat.db` (read-only; received messages
+      from `ROCKETMONEY_OTP_SENDER`, default 22395, that arrived after the password was
+      submitted; text never logged) and feeds it to `submitOtp`, so the login finishes
+      unattended. Needs iPhone Text Message Forwarding and Full Disk Access for the
+      server's `node`; the startup line `[otp-messages] on` / `can't read` says which.
+      `ROCKETMONEY_OTP_FROM_MESSAGES=0` turns it off. *To verify:* after deploy, the
+      startup log shows `[otp-messages] on`; the next SMS login logs `code found in
+      Messages` then `success (MFA satisfied)`.
 
 ## Second sweep (2026-10-29, after PR #7)
 
